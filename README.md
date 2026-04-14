@@ -21,6 +21,10 @@ Scholar scraping is never on the primary path — OpenAlex and Crossref cover al
 
 Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (cache) + rich + environs + pytest + pytest-httpx. No GUI, no ORM, no async.
 
+## Claude Code skill
+
+A minimal example [`SKILL.md`](skills/publications/SKILL.md) ships in `skills/publications/` — drop it into `~/.claude/skills/publications/` (or `<project>/.claude/skills/publications/`) to use the CLI from a Claude Code session. It's deliberately thin: resolve the paper, print the metadata, stop. Adapt the last step for your own downstream workflow (Zettelkasten import, BibTeX append, etc.).
+
 ## Quickstart
 
 ```bash
@@ -95,6 +99,31 @@ Layer rules: imports only go downward. Models import nothing from this project. 
 ## Status
 
 v0.1 — all five open-API sources wired up with a merge-logic enrichment chain, a SQLite cache keyed by DOI / arXiv id / OpenAlex id / title (second query for the same paper is offline), and a PDF download chain with OpenAlex → arXiv → Unpaywall fallback plus content-type and size validation. Optional `scholarly` extra for Google Scholar URLs (install with `uv sync --extra scholar`).
+
+## Usage and terms
+
+This tool is intended for **personal and academic research use**. It queries free, public APIs on your behalf. **You are responsible for complying with each upstream's terms of service** — the MIT licence on this repo covers the *code* of this tool, not the data you fetch through it.
+
+**Not supported use cases**:
+
+- **Bulk scraping** / batch ingestion of millions of records. Most upstreams publish free database snapshots; use those instead of hammering the live API.
+- **Rehosting downloaded PDFs** on a public server. The `--download-pdf` flag writes to a local cache on your machine — that is fine. Re-serving arXiv PDFs, publisher PDFs, or full text from your own infrastructure is not (see arXiv and Semantic Scholar rows below).
+- **Commercial repackaging** of the JSON output as a paid product. Individual commercial use of the metadata is generally allowed by the underlying licences, but Semantic Scholar in particular requires attribution and some S2 records are `CC BY-NC`.
+- **Automated / large-scale Google Scholar queries**. See the Scholar note below.
+
+**Per-source summary**:
+
+| Source | Data licence | Rate limit | Attribution | Notes |
+|---|---|---|---|---|
+| [OpenAlex](https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication) | CC0 — *"OpenAlex data is and will remain available at no cost"* | ~100k / day on the polite pool; single-entity lookups unlimited | not required | Provide an email via `PUBLICATIONS_CONTACT_EMAIL` for the polite pool, or set `OPENALEX_API_KEY` for the new key-based tier (OpenAlex announced in January 2026 that key authentication is replacing the mailto polite pool; the tool supports both). |
+| [Crossref REST](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) | CC0 for metadata — *"almost none of the metadata is subject to copyright, and you may use it for any purpose"*. Some abstracts may remain copyrighted. | No hard cap; the polite pool is requested via your `mailto=` / User-Agent | not required, but recommended | Commercial users who need SLAs should subscribe to Metadata Plus directly with Crossref. |
+| [arXiv API](https://info.arxiv.org/help/api/tou.html) | Metadata CC0. PDFs retain their authors' / arXiv's licence. | **1 request / 3 seconds** (the tool enforces this globally via a module-level lock) | Do not claim arXiv endorses your project. | **You may not store and re-serve arXiv e-prints (PDFs, source files, other content) from your own servers unless you have the copyright holder's permission.** Downloading for local personal reading is explicitly allowed. |
+| [Semantic Scholar](https://www.semanticscholar.org/product/api/license) | S2 data may be `CC BY-NC` or `ODC-BY` depending on the record. The API itself is provided *"AS IS, WITH ALL FAULTS, AND AS AVAILABLE"* with no warranty. | Public endpoints need no auth; higher throughput requires a free key from Ai2. | **Required** — *"Licensee will include an attribution to 'Semantic Scholar'"*, and publications must cite *The Semantic Scholar Open Data Platform*. | You may not *"repackage, sell, rent, lease, lend, distribute, or sublicense the API"*. This tool is a personal client, not a proxy. |
+| [Unpaywall](https://unpaywall.org/products/api) | CC0 data | 100k requests / day | not required | The email parameter is **mandatory** — Unpaywall uses it to contact you if something goes wrong. Don't fake it. For bulk workloads, download the free data snapshot instead of hammering the API. |
+
+**Google Scholar / the `scholarly` optional extra**: Google Scholar has no official API. Google's Terms of Service prohibit automated access, and the third-party [`scholarly`](https://pypi.org/project/scholarly/) library is routinely CAPTCHA-blocked. In this tool, Scholar is wired up as a **last-resort fallback only**, used exclusively when you paste a Scholar URL and nothing else can resolve the paper: exactly one `scholarly` call recovers the title, then the resolver pivots back to OpenAlex / Crossref for everything else. This is a grey area — tolerable at trickle volume for occasional personal lookups, but **not** something you should automate or batch. If your workflow involves more than the occasional manual paste, do not install the `scholar` extra; the tool will work fine without it.
+
+**No warranty**: see the MIT [`LICENSE`](LICENSE) — this tool is provided as-is, with no guarantee that its JSON output is correct, complete, or current. Verify critical metadata against the canonical upstream before relying on it.
 
 ## Licence
 

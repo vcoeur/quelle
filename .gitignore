@@ -19,7 +19,6 @@ dist/
 htmlcov/
 .ruff_cache/
 .mypy_cache/
-uv.lock
 
 # Editor / OS
 .DS_Store
