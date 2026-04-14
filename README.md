@@ -13,9 +13,8 @@ Given a publication identifier or a free-text title, `publications fetch` return
 | [Semantic Scholar](https://api.semanticscholar.org/) | Citation graph + metadata fallback | 5000 / 5 min unauth |
 | [arXiv](https://info.arxiv.org/help/api/) | Preprint metadata + direct PDFs | 1 req / 3s (enforced) |
 | [Unpaywall](https://unpaywall.org/products/api) | DOI → OA PDF lookup | 100k / day |
-| [`scholarly`](https://pypi.org/project/scholarly/) | Last-resort for Google Scholar URLs | optional extra |
 
-Scholar scraping is never on the primary path — OpenAlex and Crossref cover almost every paper with a DOI.
+Google Scholar URLs are **not supported**: Scholar has no public API and its Terms of Service prohibit automated access. If you only have a Scholar link, open the page, copy the paper title, and feed that to `publications fetch` as a free-text query — OpenAlex and Crossref cover almost every paper with a DOI.
 
 ## Stack
 
@@ -83,7 +82,7 @@ app/
     errors.py          <- Error hierarchy -> exit codes 1/2/3/4
     http_client.py     <- httpx + polite User-Agent
     pdf_downloader.py  <- Streaming PDF download with content-type + size checks
-    sources/           <- One module per source: openalex, crossref, semantic_scholar, arxiv, unpaywall, scholar_fallback
+    sources/           <- One module per source: openalex, crossref, semantic_scholar, arxiv, unpaywall
   services/
     resolver.py         <- Source orchestration + enrichment chain + cache lookup
     pdf_resolver.py     <- Lazy PDF fallback chain
@@ -98,7 +97,7 @@ Layer rules: imports only go downward. Models import nothing from this project. 
 
 ## Status
 
-v0.1 — all five open-API sources wired up with a merge-logic enrichment chain, a SQLite cache keyed by DOI / arXiv id / OpenAlex id / title (second query for the same paper is offline), and a PDF download chain with OpenAlex → arXiv → Unpaywall fallback plus content-type and size validation. Optional `scholarly` extra for Google Scholar URLs (install with `uv sync --extra scholar`).
+v0.1 — all five open-API sources wired up with a merge-logic enrichment chain, a SQLite cache keyed by DOI / arXiv id / OpenAlex id / title (second query for the same paper is offline), and a PDF download chain with OpenAlex → arXiv → Unpaywall fallback plus content-type and size validation.
 
 ## Usage and terms
 
@@ -109,7 +108,6 @@ This tool is intended for **personal and academic research use**. It queries fre
 - **Bulk scraping** / batch ingestion of millions of records. Most upstreams publish free database snapshots; use those instead of hammering the live API.
 - **Rehosting downloaded PDFs** on a public server. The `--download-pdf` flag writes to a local cache on your machine — that is fine. Re-serving arXiv PDFs, publisher PDFs, or full text from your own infrastructure is not (see arXiv and Semantic Scholar rows below).
 - **Commercial repackaging** of the JSON output as a paid product. Individual commercial use of the metadata is generally allowed by the underlying licences, but Semantic Scholar in particular requires attribution and some S2 records are `CC BY-NC`.
-- **Automated / large-scale Google Scholar queries**. See the Scholar note below.
 
 **Per-source summary**:
 
@@ -121,7 +119,7 @@ This tool is intended for **personal and academic research use**. It queries fre
 | [Semantic Scholar](https://www.semanticscholar.org/product/api/license) | S2 data may be `CC BY-NC` or `ODC-BY` depending on the record. The API itself is provided *"AS IS, WITH ALL FAULTS, AND AS AVAILABLE"* with no warranty. | Public endpoints need no auth; higher throughput requires a free key from Ai2. | **Required** — *"Licensee will include an attribution to 'Semantic Scholar'"*, and publications must cite *The Semantic Scholar Open Data Platform*. | You may not *"repackage, sell, rent, lease, lend, distribute, or sublicense the API"*. This tool is a personal client, not a proxy. |
 | [Unpaywall](https://unpaywall.org/products/api) | CC0 data | 100k requests / day | not required | The email parameter is **mandatory** — Unpaywall uses it to contact you if something goes wrong. Don't fake it. For bulk workloads, download the free data snapshot instead of hammering the API. |
 
-**Google Scholar / the `scholarly` optional extra**: Google Scholar has no official API. Google's Terms of Service prohibit automated access, and the third-party [`scholarly`](https://pypi.org/project/scholarly/) library is routinely CAPTCHA-blocked. In this tool, Scholar is wired up as a **last-resort fallback only**, used exclusively when you paste a Scholar URL and nothing else can resolve the paper: exactly one `scholarly` call recovers the title, then the resolver pivots back to OpenAlex / Crossref for everything else. This is a grey area — tolerable at trickle volume for occasional personal lookups, but **not** something you should automate or batch. If your workflow involves more than the occasional manual paste, do not install the `scholar` extra; the tool will work fine without it.
+**Google Scholar is not supported.** Google Scholar has no official API, and Google's Terms of Service prohibit automated access. Passing a Scholar URL to `publications fetch` returns a `UserError` asking you to copy the paper title manually and retry — OpenAlex and Crossref together cover almost every paper with a DOI, so the workaround is usually one extra copy-paste.
 
 **No warranty**: see the MIT [`LICENSE`](LICENSE) — this tool is provided as-is, with no guarantee that its JSON output is correct, complete, or current. Verify critical metadata against the canonical upstream before relying on it.
 

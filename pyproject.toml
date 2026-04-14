@@ -13,9 +13,6 @@ dependencies = [
     "typer>=0.16",
 ]
 
-[project.optional-dependencies]
-scholar = ["scholarly>=1.7"]
-
 [project.scripts]
 publications = "app.cli.main:app"
 

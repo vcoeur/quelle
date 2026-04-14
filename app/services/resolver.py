@@ -23,7 +23,7 @@ import httpx
 
 from app.models.publication import Publication
 from app.repositories.cache import Cache
-from app.repositories.errors import NetworkError, NotFoundError, PublicationsError
+from app.repositories.errors import NetworkError, NotFoundError, PublicationsError, UserError
 from app.repositories.sources import arxiv, crossref, openalex, semantic_scholar
 from app.settings import Settings
 
@@ -37,10 +37,14 @@ def resolve(client: httpx.Client, settings: Settings, query: str) -> Publication
     stripped = query.strip()
 
     if _SCHOLAR_HOST_RE.search(stripped):
-        from app.repositories.sources import scholar_fallback
-
-        title = scholar_fallback.extract_title_from_scholar_url(stripped)
-        return openalex.search_by_title(client, settings, title)
+        # Google Scholar has no public API and its ToS prohibits scraping.
+        # We do not resolve Scholar URLs — the user should open the page,
+        # copy the paper title, and retry with the title as a free-text query.
+        raise UserError(
+            "Google Scholar URLs are not supported. Open the Scholar page, "
+            "copy the paper title, and retry: "
+            'publications fetch "<paper title>"'
+        )
 
     doi_candidate = _extract_doi(stripped)
     if doi_candidate:

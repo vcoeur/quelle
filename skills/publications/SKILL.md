@@ -1,7 +1,7 @@
 ---
 name: publications
-description: Fetch academic publication metadata (title, authors, year, DOI, abstract, citation count) and optionally download the open-access PDF from a DOI, arXiv id, Google Scholar URL, or free-text title. Walks a fallback chain of free open APIs — OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall — and returns a normalised JSON blob. Has no knowledge of any particular note-taking system; use this as a building block that you pipe into your own downstream workflow (reference manager import, note template, citation generator, etc). Use when the user says "look up this paper", "get metadata for DOI 10.xxx", "find the arXiv entry for X", or pastes a paper identifier with intent to retrieve information about it.
-argument-hint: "<DOI | arXiv id | Scholar URL | title>"
+description: Fetch academic publication metadata (title, authors, year, DOI, abstract, citation count) and optionally download the open-access PDF from a DOI, arXiv id, or free-text title. Walks a fallback chain of free open APIs — OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall — and returns a normalised JSON blob. Has no knowledge of any particular note-taking system; use this as a building block that you pipe into your own downstream workflow (reference manager import, note template, citation generator, etc). Use when the user says "look up this paper", "get metadata for DOI 10.xxx", "find the arXiv entry for X", or pastes a paper identifier with intent to retrieve information about it. Google Scholar URLs are not supported — ask the user to copy the paper title from Scholar and pass it as free text instead.
+argument-hint: "<DOI | arXiv id | title>"
 allowed-tools: Read, Write, Edit, Bash(publications fetch:*), Bash(publications cache:*), Bash(publications config:*), Bash(publications version:*), Bash(python3:*), Bash(jq:*), Bash(command -v publications:*)
 ---
 
