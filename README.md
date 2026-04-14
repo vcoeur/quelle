@@ -105,7 +105,7 @@ This tool is intended for **personal and academic research use**. It queries fre
 
 **Not supported use cases**:
 
-- **Bulk scraping** / batch ingestion of millions of records. Most upstreams publish free database snapshots; use those instead of hammering the live API.
+- **Bulk scraping** / batch ingestion of many records. Most upstreams publish free database snapshots; use those instead of hammering the live API.
 - **Rehosting downloaded PDFs** on a public server. The `--download-pdf` flag writes to a local cache on your machine — that is fine. Re-serving arXiv PDFs, publisher PDFs, or full text from your own infrastructure is not (see arXiv and Semantic Scholar rows below).
 - **Commercial repackaging** of the JSON output as a paid product. Individual commercial use of the metadata is generally allowed by the underlying licences, but Semantic Scholar in particular requires attribution and some S2 records are `CC BY-NC`.
 
