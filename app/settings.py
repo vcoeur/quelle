@@ -1,7 +1,7 @@
 """Runtime configuration loaded from environment and .env files.
 
-Local state lives under `PUBLICATIONS_HOME`. Discovery order mirrors
-KastenManager so the same codebase works in three runtime contexts:
+Local state lives under `PUBLICATIONS_HOME`. The discovery order is
+designed so the same codebase works in three runtime contexts:
 
   1. **Dev from the repo** (`uv run publications …`, `make ...`):
      `_default_home()` walks up from `__file__` and finds the repo root

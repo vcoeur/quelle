@@ -2,7 +2,7 @@
 
 All external sources (OpenAlex, Crossref, Semantic Scholar, arXiv)
 map their raw responses into `Publication` before returning.
-Downstream code (CLI output, cache, Kasten handoff) only ever sees
+Downstream code (CLI output, cache, JSON export) only ever sees
 this shape.
 """
 

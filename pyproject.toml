@@ -1,7 +1,10 @@
 [project]
 name = "publication-manager"
 version = "0.1.0"
-description = "Fetch academic publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) for ingest into Kasten"
+description = "Fetch academic publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and return normalised JSON"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Alice Voland" }]
 requires-python = ">=3.12"
 dependencies = [
     "environs>=14.6.0",

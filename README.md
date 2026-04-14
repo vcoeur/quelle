@@ -1,8 +1,6 @@
 # PublicationManager
 
-Local CLI that fetches academic publication metadata and PDFs from open sources, caches them locally, and hands them off to Kasten as literature notes.
-
-Primary consumer is Claude itself via the `publications` skill; humans are a secondary audience.
+Local CLI that fetches academic publication metadata and PDFs from open academic sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and returns them as normalised JSON. Designed as a composable building block — feed the output into any note-taking system, reference manager, or research workflow.
 
 ## What it does
 
@@ -17,15 +15,18 @@ Given a publication identifier or a free-text title, `publications fetch` return
 | [Unpaywall](https://unpaywall.org/products/api) | DOI → OA PDF lookup | 100k / day |
 | [`scholarly`](https://pypi.org/project/scholarly/) | Last-resort for Google Scholar URLs | optional extra |
 
-No Scholar scraping on the primary path. See the design notes in `~/src/vcoeur/conception/projects/2026-04-14-google-scholar-kasten-ingest/`.
+Scholar scraping is never on the primary path — OpenAlex and Crossref cover almost every paper with a DOI.
 
 ## Stack
 
-Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (cache) + rich + environs + pytest + pytest-httpx. No GUI, no ORM, no async. Same architectural conventions as [`KastenManager`](../KastenManager/).
+Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (cache) + rich + environs + pytest + pytest-httpx. No GUI, no ORM, no async.
 
 ## Quickstart
 
 ```bash
+git clone https://github.com/vcoeur/PublicationManager.git
+cd PublicationManager
+
 make dev-install          # install all deps incl. dev
 make test                 # pytest (80+ unit + smoke tests)
 make lint                 # ruff check + format --check
@@ -93,13 +94,12 @@ Layer rules: imports only go downward. Models import nothing from this project. 
 
 ## Status
 
-Phases 1-6 of the conception implementation plan are done:
+v0.1 — all five open-API sources wired up with a merge-logic enrichment chain, a SQLite cache keyed by DOI / arXiv id / OpenAlex id / title (second query for the same paper is offline), and a PDF download chain with OpenAlex → arXiv → Unpaywall fallback plus content-type and size validation. Optional `scholarly` extra for Google Scholar URLs (install with `uv sync --extra scholar`).
 
-- **Phase 1** — All 4 open-API sources implemented with a merge-logic enrichment chain.
-- **Phase 2** — SQLite cache with DOI / arXiv / OpenAlex / title lookup; second query for the same paper is offline.
-- **Phase 3** — PDF download chain (`--download-pdf`) with OpenAlex → arXiv → Unpaywall fallback, content-type + size validation.
-- **Phase 4** — Optional `scholarly` extra for Google Scholar URLs (install with `uv sync --extra scholar`).
-- **Phase 5** — Thin `publications` skill under `ClaudeConfig/config/skills/publications/` that chains `publications fetch` into `kasten upload` + `kasten create`.
-- **Phase 6** — Polished `.env.example`, README, and error messages.
+## Licence
 
-Next step: run the skill end-to-end against the 5-paper test corpus described in the conception project.
+MIT — see [`LICENSE`](LICENSE).
+
+## Questions or feedback
+
+This is a personal tool — I'm happy to hear from you, but there is no formal support. The best way to reach me is the contact form on [vcoeur.com](https://vcoeur.com).

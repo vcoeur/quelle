@@ -6,8 +6,8 @@ Writes store the full serialised `Publication` as a JSON blob in the
 require a schema migration. The structured id columns are there so
 we can look up the same row from any known key.
 
-Same conventions as KastenManager's `Store`: raw SQL, explicit
-schema in `_SCHEMA`, stampable `schema_version` in a `meta` table.
+Raw SQL, no ORM. The schema lives as an explicit string in `_SCHEMA`
+and is versioned via the `meta` table (`schema_version`).
 """
 
 from __future__ import annotations

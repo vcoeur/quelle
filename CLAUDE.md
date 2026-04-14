@@ -1,12 +1,12 @@
 # CLAUDE.md — PublicationManager
 
-Local CLI that fetches academic publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall), and hands them off to Kasten. Primary consumer is Claude itself via a `publications` skill.
+Local CLI that fetches academic publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and returns them as normalised JSON. Designed as a composable building block — the tool has no hardcoded opinion about where results end up; downstream consumers (skills, scripts, reference managers) decide that.
 
 ## Project type
 
 - **Not deployed.** Per-laptop tool, installed globally via `uv tool install .`.
 - **No daemon / server.** Every invocation is a short-lived CLI process.
-- **Multiple upstreams, no single source of truth.** Unlike KastenManager (which mirrors `notes.vcoeur.com`), this tool queries 5+ different open APIs and normalises their responses. Cache is a convenience, not a mirror.
+- **Multiple upstreams, no single source of truth.** This tool queries 5+ different open APIs and normalises their responses. Cache is a convenience, not a mirror.
 
 ## Stack
 
@@ -16,7 +16,7 @@ Local CLI that fetches academic publication metadata and PDFs from open sources 
 
 ## Architecture
 
-Strict layers — imports only go downward. Same as KastenManager.
+Strict layers — imports only go downward.
 
 ```
 app/
@@ -43,8 +43,6 @@ Default layout — `PUBLICATIONS_HOME` anchors a state dir:
 - `$PUBLICATIONS_HOME/.env` — API keys + contact email (gitignored)
 
 ### How `PUBLICATIONS_HOME` is resolved
-
-Same pattern as KastenManager:
 
 - **Dev** (`uv run publications …`, `make` from the repo): `_default_home()` walks up from `__file__` and finds the repo root via `pyproject.toml`.
 - **Installed** (`uv tool install .` → `~/.local/bin/publications`): `__file__` is in a uv tools venv, so the walk is skipped and the tool falls back to `~/.publications`. `~/.config/publications/.env` is layered first so the installed CLI can still point at a repo vault.
@@ -82,8 +80,3 @@ make tool-install  # install `publications` globally via `uv tool install`
 2. Before committing: `make lint && make test`.
 3. When adding a new CLI command: add a smoke test in `tests/test_cli_smoke.py`.
 4. When adding a new source: add a mapper unit test that feeds a recorded fixture JSON into `_to_publication` — no network required.
-
-## Related projects
-
-- `~/src/vcoeur/KastenManager/` — same architectural conventions (layered app, uv, Typer, rich, environs). Copy patterns from there first before inventing new ones.
-- `~/src/vcoeur/conception/projects/2026-04-14-google-scholar-kasten-ingest/` — conception project with source research and design notes.
