@@ -1,6 +1,6 @@
 [project]
 name = "quelle"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fetch academic publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and return normalised JSON"
 readme = "README.md"
 license = { text = "MIT" }
@@ -26,7 +26,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/vcoeur/quelle"
+Homepage = "https://quelle.vcoeur.com/"
+Documentation = "https://quelle.vcoeur.com/"
 Repository = "https://github.com/vcoeur/quelle"
 Issues = "https://github.com/vcoeur/quelle/issues"
 

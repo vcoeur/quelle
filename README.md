@@ -108,7 +108,7 @@ quelle cache clear --yes
 
 ## Claude Code skill
 
-A minimal example [`SKILL.md`](skills/quelle/SKILL.md) ships in `skills/quelle/` — drop it into `~/.claude/skills/quelle/` (or `<project>/.claude/skills/quelle/`) to use the CLI from a Claude Code session. It's deliberately thin: resolve the paper, print the metadata, stop. Adapt the last step for your own downstream workflow (Zettelkasten import, BibTeX append, etc.).
+A minimal example [`SKILL.md`](SKILL.md) ships at the repo root — drop it into `~/.claude/skills/quelle/` (or `<project>/.claude/skills/quelle/`) to use the CLI from a Claude Code session. It is deliberately thin: resolve the paper, print the metadata, stop. Adapt the last step for your own downstream workflow (Zettelkasten import, BibTeX append, etc.). The skill also includes a prominent reminder about each upstream's Terms of Service and rate limits — read it before running `quelle` at any non-trivial scale.
 
 ## Layout
 

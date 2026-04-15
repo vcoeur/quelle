@@ -2,7 +2,7 @@ site_name: quelle
 site_url: https://quelle.vcoeur.com/
 site_description: Local CLI that fetches academic publication metadata and PDFs from OpenAlex, Crossref, Semantic Scholar, arXiv, and Unpaywall — as normalised JSON.
 site_author: Alice Voland
-copyright: "&copy; Alice Voland"
+copyright: 'Developed by Alice Voland &middot; <a href="https://vcoeur.com">vcoeur.com</a>'
 
 repo_url: https://github.com/vcoeur/quelle
 repo_name: vcoeur/quelle
