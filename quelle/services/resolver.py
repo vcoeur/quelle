@@ -21,11 +21,11 @@ import re
 
 import httpx
 
-from app.models.publication import Publication
-from app.repositories.cache import Cache
-from app.repositories.errors import NetworkError, NotFoundError, PublicationsError, UserError
-from app.repositories.sources import arxiv, crossref, openalex, semantic_scholar
-from app.settings import Settings
+from quelle.models.publication import Publication
+from quelle.repositories.cache import Cache
+from quelle.repositories.errors import NetworkError, NotFoundError, PublicationsError, UserError
+from quelle.repositories.sources import arxiv, crossref, openalex, semantic_scholar
+from quelle.settings import Settings
 
 _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _ARXIV_RE = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+/\d{7}(v\d+)?)$", re.IGNORECASE)

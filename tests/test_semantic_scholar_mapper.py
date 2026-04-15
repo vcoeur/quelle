@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.repositories.errors import NotFoundError
-from app.repositories.sources.semantic_scholar import _to_publication
+from quelle.repositories.errors import NotFoundError
+from quelle.repositories.sources.semantic_scholar import _to_publication
 
 
 def _yang_paper() -> dict:

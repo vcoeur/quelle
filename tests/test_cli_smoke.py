@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from app.cli.main import app
+from quelle.cli.main import app
 
 runner = CliRunner()
 
@@ -15,24 +15,27 @@ runner = CliRunner()
 def test_version_command_json() -> None:
     result = runner.invoke(app, ["version", "--json"])
     assert result.exit_code == 0
-    assert '"publication-manager"' in result.output
+    assert '"quelle"' in result.output
 
 
 def test_version_command_plain() -> None:
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "publication-manager 0.1.0" in result.output
+    assert "quelle 0.1.0" in result.output
 
 
 def test_config_show_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PUBLICATIONS_HOME", str(tmp_path))
-    monkeypatch.setenv("PUBLICATIONS_CONTACT_EMAIL", "alice@example.com")
-    result = runner.invoke(app, ["config", "--json"])
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+    result = runner.invoke(app, ["config", "show", "--json"])
     assert result.exit_code == 0
-    assert "state_dir" in result.output
+    assert "cache_dir" in result.output
     assert "alice@example.com" in result.output
-    # The state dir should have been created by ensure_dirs.
-    assert (tmp_path / ".publications-state" / "pdfs").is_dir()
+    # ensure_dirs should have created data/pdfs and cache dirs.
+    assert (tmp_path / "data" / "pdfs").is_dir()
+    assert (tmp_path / "cache").is_dir()
 
 
 def test_fetch_requires_query() -> None:

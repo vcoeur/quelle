@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from app.settings import Settings
+from quelle.paths import Paths
+from quelle.settings import Settings
 
 
 @pytest.fixture(autouse=True)
@@ -25,20 +26,30 @@ def _clear_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def tmp_settings(tmp_path: Path) -> Settings:
-    """A Settings pointing at a fresh tmp_path, no secrets set."""
-    state_dir = tmp_path / ".publications-state"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    (state_dir / "pdfs").mkdir(parents=True, exist_ok=True)
+    """A Settings with paths rooted under a fresh tmp_path, no secrets set."""
+    config_dir = tmp_path / "cfg"
+    data_dir = tmp_path / "data"
+    cache_dir = tmp_path / "cache"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "pdfs").mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    test_paths = Paths(
+        config_dir=config_dir,
+        data_dir=data_dir,
+        cache_dir=cache_dir,
+        env_file=config_dir / ".env",
+        pdf_dir=data_dir / "pdfs",
+        cache_db=cache_dir / "cache.sqlite",
+        is_dev=False,
+    )
     return Settings(
         openalex_api_key="",
         semantic_scholar_api_key="",
         unpaywall_email="",
         contact_email="tests@example.com",
         http_timeout=5.0,
-        user_agent="PublicationManager-tests/0.1.0",
+        user_agent="quelle-tests/0.1.0",
         max_pdf_mb=100,
-        home=tmp_path,
-        state_dir=state_dir,
-        cache_db=state_dir / "cache.sqlite",
-        pdf_dir=state_dir / "pdfs",
+        paths=test_paths,
     )

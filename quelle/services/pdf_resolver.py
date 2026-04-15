@@ -12,11 +12,11 @@ from pathlib import Path
 
 import httpx
 
-from app.models.publication import Publication
-from app.repositories.errors import NetworkError
-from app.repositories.pdf_downloader import download_pdf
-from app.repositories.sources import unpaywall
-from app.settings import Settings
+from quelle.models.publication import Publication
+from quelle.repositories.errors import NetworkError
+from quelle.repositories.pdf_downloader import download_pdf
+from quelle.repositories.sources import unpaywall
+from quelle.settings import Settings
 
 
 @dataclass

@@ -6,7 +6,7 @@ shape of `GET /works/...` responses.
 
 from __future__ import annotations
 
-from app.repositories.sources.openalex import (
+from quelle.repositories.sources.openalex import (
     _extract_arxiv_id,
     _reconstruct_abstract,
     _to_publication,

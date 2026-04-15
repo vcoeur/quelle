@@ -6,7 +6,7 @@ Inlined fixture JSON mirrors the shape of a real
 
 from __future__ import annotations
 
-from app.repositories.sources.crossref import (
+from quelle.repositories.sources.crossref import (
     _extract_pdf_link,
     _extract_year,
     _strip_jats,

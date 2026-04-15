@@ -7,9 +7,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.models.publication import Author, Publication
-from app.repositories.cache import Cache
-from app.services.resolver import resolve_with_enrichment
+from quelle.models.publication import Author, Publication
+from quelle.repositories.cache import Cache
+from quelle.services.resolver import resolve_with_enrichment
 
 
 def _exploding_client() -> httpx.Client:

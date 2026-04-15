@@ -18,8 +18,8 @@ from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.models.publication import Author, Publication
-from app.repositories.errors import CacheError
+from quelle.models.publication import Author, Publication
+from quelle.repositories.errors import CacheError
 
 SCHEMA_VERSION = 1
 

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import httpx
 
-from app.models.publication import Publication
-from app.services.pdf_resolver import resolve_and_download
+from quelle.models.publication import Publication
+from quelle.services.pdf_resolver import resolve_and_download
 
 
 def _publication_with_arxiv() -> Publication:
