@@ -24,32 +24,32 @@ Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (
 
 ## Installation
 
-The easiest path — install from PyPI:
+Install from PyPI:
 
 ```bash
 pip install quelle
-# or, fully isolated in its own virtualenv:
-uv tool install quelle
 ```
 
-From source (for development):
+Run the one-time bootstrap to create the config, data, and cache directories and seed a default `.env`:
+
+```bash
+quelle init
+quelle config edit        # opens the .env in your $EDITOR
+```
+
+### Development from a source checkout
 
 ```bash
 git clone https://github.com/vcoeur/quelle.git
 cd quelle
-make dev-install          # install all deps incl. dev
+make dev-install          # uv sync --all-groups
 make test                 # pytest
 make lint                 # ruff check + format --check
 make format               # ruff --fix + format
-make tool-install         # install `quelle` globally via uv tool install
+uv run quelle --help      # run the CLI straight from the repo
 ```
 
-Once installed, run the one-time bootstrap:
-
-```bash
-quelle init               # creates config/data/cache dirs and seeds a default .env
-quelle config edit        # opens the .env in your $EDITOR
-```
+When run from the repo, `quelle` picks up the `.env` at the repo root and stores dev cache / PDFs under a repo-local `.dev-state/` instead of polluting your installed user data.
 
 ## Configuration
 

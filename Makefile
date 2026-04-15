@@ -26,10 +26,4 @@ format: ## Ruff auto-fix + format
 	uv run ruff check --fix .
 	uv run ruff format .
 
-tool-install: ## Install `quelle` globally via `uv tool install` (one-time)
-	uv tool install --force --reinstall --editable .
-
-tool-uninstall: ## Remove the global quelle command
-	uv tool uninstall quelle
-
-.PHONY: help install dev-install run test coverage lint format tool-install tool-uninstall
+.PHONY: help install dev-install run test coverage lint format
