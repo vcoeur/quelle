@@ -5,6 +5,7 @@
 # Local dev state (dev-mode cache DB + downloaded PDFs under the repo root).
 # Installed users' data lives in platformdirs dirs, not here.
 .dev-state/
+.publications-state/
 
 # Python build artefacts
 __pycache__/
