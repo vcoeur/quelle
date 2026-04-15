@@ -62,6 +62,34 @@ Every command accepts `--json` for machine-readable output. See [Commands](comma
 
 You want to grab a paper's metadata without opening a browser, without a paid API key, and without writing source-specific HTTP calls yourself. `quelle` wraps the free open-access ecosystem behind one command and hands you normalised JSON. Good for personal research notes, Claude skills that need to resolve a paper mid-session, and anyone who wants "I have a DOI → I have a Publication" in one step.
 
+## Using quelle with knoten
+
+`quelle` is a building block — it resolves a source, hands you JSON, and stops. The natural downstream is a note system. [`knoten`](https://knoten.vcoeur.com) — the companion CLI zettelkasten — consumes a `quelle` JSON envelope as the body of a reference note and lets you attach the downloaded PDF as a file note with a matching citation key.
+
+```bash
+# 1. Resolve the paper.
+quelle fetch 10.1109/83.902291 --json > /tmp/paper.json
+
+# 2. Derive a citation key.
+cite=$(jq -r '.authors[0].family + (.year | tostring)' /tmp/paper.json)
+title=$(jq -r '.title' /tmp/paper.json)
+
+# 3. Create a reference note in the knoten vault.
+knoten create \
+  --filename "${cite}= ${title}" \
+  --frontmatter-file /tmp/paper.json \
+  --body "$(jq -r '.abstract // ""' /tmp/paper.json)" \
+  --json
+
+# 4. If an open-access PDF is available, attach it.
+quelle fetch 10.1109/83.902291 --download-pdf
+knoten upload "<quelle-data-dir>/pdfs/<filename>.pdf" \
+  --filename "${cite}+ ${title}.pdf" \
+  --json
+```
+
+The reference note and the file note share the citation key, so `knoten backlinks "${cite}= ${title}"` surfaces the attachment alongside every literature note that cites the source. See the knoten [Vault structure](https://knoten.vcoeur.com/vault-structure/#source-ingest-with-quelle) page for the full reference/literature/file-note convention, citation-key rules, and the decision rule for when a source deserves the reference + literature split versus a single journal note.
+
 ## Usage and terms
 
 `quelle` is intended for **personal and academic research use** — it queries free public APIs on your behalf, and **you are responsible for complying with each upstream's terms of service**. Bulk scraping, rehosting downloaded PDFs, and commercial repackaging of the output are not supported use cases. See the [README](https://github.com/vcoeur/quelle#usage-and-terms) for the per-source licence / rate-limit summary.
@@ -70,5 +98,6 @@ You want to grab a paper's metadata without opening a browser, without a paid AP
 
 - [Install guide](install.md) — prerequisites, first-run bootstrap, cross-OS paths, dev mode
 - [Commands](commands.md) — full CLI reference
+- [`knoten`](https://knoten.vcoeur.com) — companion CLI zettelkasten that consumes `quelle` output into reference + file notes
 - [Source on GitHub](https://github.com/vcoeur/quelle)
 - [`quelle` on PyPI](https://pypi.org/project/quelle/)
