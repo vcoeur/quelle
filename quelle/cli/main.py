@@ -19,6 +19,7 @@ from dataclasses import asdict
 
 import typer
 
+from quelle import __version__
 from quelle.cli.config import config_app, init_command
 from quelle.cli.output import (
     OutputMode,
@@ -50,6 +51,27 @@ app = typer.Typer(
 cache_app = typer.Typer(help="Inspect the local SQLite cache.", no_args_is_help=True)
 app.add_typer(cache_app, name="cache")
 app.add_typer(config_app, name="config")
+
+
+@app.callback(invoke_without_command=True)
+def _root(
+    ctx: typer.Context,
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Print version and exit.",
+        is_eager=True,
+    ),
+) -> None:
+    """Root callback — handles the global `--version` flag.
+
+    `invoke_without_command=True` lets `quelle --version` short-circuit
+    without requiring a subcommand; a bare `quelle` with no subcommand
+    still falls through to the help view via `no_args_is_help=True`.
+    """
+    if version:
+        typer.echo(f"quelle {__version__}")
+        raise typer.Exit(0)
 
 
 def _load() -> Settings:
