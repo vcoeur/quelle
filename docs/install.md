@@ -93,7 +93,3 @@ make format                        # ruff --fix + format
 ```
 
 When run from the repo, `quelle` picks up the `.env` at the repo root, but downloaded PDFs and the SQLite cache go into a repo-local `.dev-state/` directory so your installed user data stays clean.
-
-## Migration from PublicationManager
-
-The first run of `quelle` automatically moves your old `~/.config/publications/.env` and `~/.publications/.publications-state/` into the new `platformdirs` locations. No data loss, no manual steps.

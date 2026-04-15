@@ -1,10 +1,9 @@
-"""One-shot migration from the legacy PublicationManager layout.
+"""One-shot migration from the legacy config/cache layout.
 
-On first upgrade from PublicationManager — where config lived at
-`~/.config/publications/.env` and cache + PDFs were bundled under
-`~/.publications/.publications-state/` — move the user's files into the new
-platformdirs layout so nothing is lost. Each move is guarded on target
-absence so running the migration twice does nothing.
+Where config lived at `~/.config/publications/.env` and cache + PDFs were
+bundled under `~/.publications/.publications-state/`, move the user's files
+into the new platformdirs layout so nothing is lost. Each move is guarded on
+target absence so running the migration twice does nothing.
 
 Called from `load_settings()` before `ensure_dirs()`. Never raises; any
 filesystem error is logged as a warning and the CLI continues.

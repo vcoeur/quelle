@@ -82,8 +82,6 @@ The only variable worth setting by default is `QUELLE_CONTACT_EMAIL` — it goes
 
 **Dev mode**: when you run `quelle` from a source checkout (`uv run quelle …` inside the repo), the `.env` at the repo root is still picked up — the same ergonomics as before — but downloaded PDFs and the cache go into a repo-local `.dev-state/` directory so your installed user data stays clean.
 
-**Migration from PublicationManager**: if you upgraded from the old `publication-manager` package, the first run of `quelle` automatically moves your `~/.config/publications/.env` and `~/.publications/.publications-state/` into the new locations. No data loss, no manual steps.
-
 ## Usage
 
 ```bash
@@ -129,7 +127,7 @@ quelle/
     config.py           <- `config show` / `path` / `edit` + bootstrap
     output.py           <- JSON vs rich TTY rendering
   paths.py              <- platformdirs resolution (config / data / cache)
-  migrate.py            <- One-shot migration from the legacy PublicationManager layout
+  migrate.py            <- One-shot migration from the legacy config/cache layout
   settings.py           <- environs-layered config
 tests/
 ```

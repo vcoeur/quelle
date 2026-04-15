@@ -68,7 +68,7 @@ You want to grab a paper's metadata without opening a browser, without a paid AP
 
 ## Learn more
 
-- [Install guide](install.md) — prerequisites, first-run bootstrap, cross-OS paths, dev mode, migration from PublicationManager
+- [Install guide](install.md) — prerequisites, first-run bootstrap, cross-OS paths, dev mode
 - [Commands](commands.md) — full CLI reference
 - [Source on GitHub](https://github.com/vcoeur/quelle)
 - [`quelle` on PyPI](https://pypi.org/project/quelle/)

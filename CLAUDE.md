@@ -27,7 +27,7 @@ quelle/
   services/      <- resolver (orchestrates which source to hit first)
   cli/           <- Typer app + config sub-app + rich/JSON output helpers
   paths.py       <- platformdirs resolution (config / data / cache)
-  migrate.py     <- One-shot migration from the legacy PublicationManager layout
+  migrate.py     <- One-shot migration from the legacy config/cache layout
   settings.py    <- environs config (uses paths.resolve internally)
 ```
 
