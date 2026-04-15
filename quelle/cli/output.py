@@ -87,7 +87,7 @@ def render_config(payload: dict[str, Any], *, mode: OutputMode) -> None:
         emit_json(payload)
         return
     table = Table(
-        title="PublicationManager",
+        title="quelle",
         show_header=False,
         box=None,
         padding=(0, 1),

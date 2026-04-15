@@ -6,9 +6,9 @@ import time
 
 import pytest
 
-from app.repositories.errors import NotFoundError
-from app.repositories.sources import arxiv
-from app.repositories.sources.arxiv import (
+from quelle.repositories.errors import NotFoundError
+from quelle.repositories.sources import arxiv
+from quelle.repositories.sources.arxiv import (
     _arxiv_id_from_abs_url,
     _parse_feed,
     _strip_version,

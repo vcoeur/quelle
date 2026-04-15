@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.repositories.errors import ConfigError
-from app.repositories.sources.unpaywall import extract_pdf_url, lookup_by_doi
+from quelle.repositories.errors import ConfigError
+from quelle.repositories.sources.unpaywall import extract_pdf_url, lookup_by_doi
 
 
 def test_extract_pdf_url_from_best_oa_location() -> None:

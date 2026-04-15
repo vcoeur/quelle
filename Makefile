@@ -9,14 +9,14 @@ install: ## Install dependencies into a uv-managed venv
 dev-install: ## Install dev dependencies too
 	uv sync --all-groups
 
-run: ## Run the publications CLI (pass args after --, e.g. make run -- config)
-	uv run publications
+run: ## Run the quelle CLI (pass args after --, e.g. make run -- config)
+	uv run quelle
 
 test: ## Run pytest
 	uv run pytest; RET=$$?; if [ $$RET -eq 5 ]; then exit 0; else exit $$RET; fi
 
 coverage: ## Run pytest with line-coverage report
-	uv run pytest --cov=app --cov-report=term-missing --cov-report=html
+	uv run pytest --cov=quelle --cov-report=term-missing --cov-report=html
 
 lint: ## Ruff lint + format check
 	uv run ruff check .
@@ -26,10 +26,10 @@ format: ## Ruff auto-fix + format
 	uv run ruff check --fix .
 	uv run ruff format .
 
-tool-install: ## Install `publications` globally via `uv tool install` (one-time)
+tool-install: ## Install `quelle` globally via `uv tool install` (one-time)
 	uv tool install --force --reinstall --editable .
 
-tool-uninstall: ## Remove the global publications command
-	uv tool uninstall publication-manager
+tool-uninstall: ## Remove the global quelle command
+	uv tool uninstall quelle
 
 .PHONY: help install dev-install run test coverage lint format tool-install tool-uninstall

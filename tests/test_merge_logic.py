@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.models.publication import Author, Publication
+from quelle.models.publication import Author, Publication
 
 
 def _openalex_skeleton() -> Publication:

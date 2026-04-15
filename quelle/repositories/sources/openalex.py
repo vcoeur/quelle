@@ -11,10 +11,10 @@ from typing import Any
 
 import httpx
 
-from app.models.publication import Author, Publication
-from app.repositories.errors import NotFoundError
-from app.repositories.http_client import get_json
-from app.settings import Settings
+from quelle.models.publication import Author, Publication
+from quelle.repositories.errors import NotFoundError
+from quelle.repositories.http_client import get_json
+from quelle.settings import Settings
 
 WORKS_URL = "https://api.openalex.org/works"
 

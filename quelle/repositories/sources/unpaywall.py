@@ -12,9 +12,9 @@ from typing import Any
 
 import httpx
 
-from app.repositories.errors import ConfigError
-from app.repositories.http_client import get_json
-from app.settings import Settings
+from quelle.repositories.errors import ConfigError
+from quelle.repositories.http_client import get_json
+from quelle.settings import Settings
 
 API_URL = "https://api.unpaywall.org/v2/{doi}"
 
@@ -28,7 +28,7 @@ def lookup_by_doi(client: httpx.Client, settings: Settings, doi: str) -> dict[st
     email = settings.unpaywall_email or settings.contact_email
     if not email:
         raise ConfigError(
-            "Unpaywall requires an email — set UNPAYWALL_EMAIL or PUBLICATIONS_CONTACT_EMAIL"
+            "Unpaywall requires an email — set UNPAYWALL_EMAIL or QUELLE_CONTACT_EMAIL"
         )
     url = API_URL.format(doi=doi)
     try:

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import httpx
 
-from app.repositories.errors import NetworkError, RateLimitError
-from app.settings import Settings
+from quelle.repositories.errors import NetworkError, RateLimitError
+from quelle.settings import Settings
 
 
 def build_client(settings: Settings) -> httpx.Client:

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from app.models.publication import Author, Publication
-from app.repositories.cache import Cache, _title_key
+from quelle.models.publication import Author, Publication
+from quelle.repositories.cache import Cache, _title_key
 
 
 def _chan_vese() -> Publication:

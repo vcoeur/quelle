@@ -12,8 +12,8 @@ from pathlib import Path
 
 import httpx
 
-from app.repositories.errors import NetworkError
-from app.settings import Settings
+from quelle.repositories.errors import NetworkError
+from quelle.settings import Settings
 
 
 @dataclass(frozen=True)

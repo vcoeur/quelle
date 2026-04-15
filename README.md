@@ -1,10 +1,12 @@
-# PublicationManager
+# quelle
 
-Local CLI that fetches academic publication metadata and PDFs from open academic sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and returns them as normalised JSON. Designed as a composable building block — feed the output into any note-taking system, reference manager, or research workflow.
+`quelle` is a local CLI that fetches academic publication metadata and PDFs from open academic sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and returns them as normalised JSON. Designed as a composable building block — feed the output into any note-taking system, reference manager, or research workflow.
+
+The name is German for *source* — in academic German, "Quelle:" is the word that introduces a bibliographic reference, and fetching from open sources is exactly what the tool does.
 
 ## What it does
 
-Given a publication identifier or a free-text title, `publications fetch` returns a normalised JSON blob with title, authors, year, venue, DOI, abstract, citation count and (optionally) a downloaded local PDF. It walks a fallback chain of free open sources:
+Given a publication identifier or a free-text title, `quelle fetch` returns a normalised JSON blob with title, authors, year, venue, DOI, abstract, citation count and (optionally) a downloaded local PDF. It walks a fallback chain of free open sources:
 
 | Source | Role | Rate limit |
 |---|---|---|
@@ -14,68 +16,103 @@ Given a publication identifier or a free-text title, `publications fetch` return
 | [arXiv](https://info.arxiv.org/help/api/) | Preprint metadata + direct PDFs | 1 req / 3s (enforced) |
 | [Unpaywall](https://unpaywall.org/products/api) | DOI → OA PDF lookup | 100k / day |
 
-Google Scholar URLs are **not supported**: Scholar has no public API and its Terms of Service prohibit automated access. If you only have a Scholar link, open the page, copy the paper title, and feed that to `publications fetch` as a free-text query — OpenAlex and Crossref cover almost every paper with a DOI.
+Google Scholar URLs are **not supported**: Scholar has no public API and its Terms of Service prohibit automated access. If you only have a Scholar link, open the page, copy the paper title, and feed that to `quelle fetch` as a free-text query — OpenAlex and Crossref cover almost every paper with a DOI.
 
 ## Stack
 
-Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (cache) + rich + environs + pytest + pytest-httpx. No GUI, no ORM, no async.
+Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (cache) + rich + environs + platformdirs + pytest + pytest-httpx. No GUI, no ORM, no async.
 
-## Claude Code skill
+## Installation
 
-A minimal example [`SKILL.md`](skills/publications/SKILL.md) ships in `skills/publications/` — drop it into `~/.claude/skills/publications/` (or `<project>/.claude/skills/publications/`) to use the CLI from a Claude Code session. It's deliberately thin: resolve the paper, print the metadata, stop. Adapt the last step for your own downstream workflow (Zettelkasten import, BibTeX append, etc.).
-
-## Quickstart
+The easiest path — install from PyPI:
 
 ```bash
-git clone https://github.com/vcoeur/PublicationManager.git
-cd PublicationManager
+pip install quelle
+# or, fully isolated in its own virtualenv:
+uv tool install quelle
+```
 
+From source (for development):
+
+```bash
+git clone https://github.com/vcoeur/quelle.git
+cd quelle
 make dev-install          # install all deps incl. dev
-make test                 # pytest (80+ unit + smoke tests)
+make test                 # pytest
 make lint                 # ruff check + format --check
 make format               # ruff --fix + format
-make tool-install         # install `publications` globally via uv tool install
-
-# Copy the sample config and fill in at least PUBLICATIONS_CONTACT_EMAIL.
-cp .env.example .env
+make tool-install         # install `quelle` globally via uv tool install
 ```
+
+Once installed, run the one-time bootstrap:
+
+```bash
+quelle init               # creates config/data/cache dirs and seeds a default .env
+quelle config edit        # opens the .env in your $EDITOR
+```
+
+## Configuration
+
+`quelle` follows each OS's standard "config dir + data dir + cache dir" layout via [`platformdirs`](https://platformdirs.readthedocs.io/):
+
+| Role | Linux (XDG) | macOS | Windows |
+|---|---|---|---|
+| Config (`.env`) | `~/.config/quelle/` | `~/Library/Application Support/quelle/` | `%APPDATA%\quelle\` |
+| Data (downloaded PDFs) | `~/.local/share/quelle/` | `~/Library/Application Support/quelle/` | `%LOCALAPPDATA%\quelle\` |
+| Cache (sqlite index) | `~/.cache/quelle/` | `~/Library/Caches/quelle/` | `%LOCALAPPDATA%\quelle\Cache\` |
+
+Any of the three can be overridden via env vars — useful for tests, Docker, or custom deployments:
+
+```bash
+export QUELLE_CONFIG_DIR=/etc/quelle
+export QUELLE_DATA_DIR=/srv/quelle/data
+export QUELLE_CACHE_DIR=/var/cache/quelle
+```
+
+Inspect the resolved paths at any time:
+
+```bash
+quelle config path        # plain output, one path per line
+quelle config path --json # JSON, scriptable
+quelle config show        # all values including API keys (redacted)
+```
+
+The only variable worth setting by default is `QUELLE_CONTACT_EMAIL` — it goes into the `User-Agent` header and enrolls you in the Crossref / OpenAlex polite pool. See [`.env.example`](.env.example) for the full list.
+
+**Dev mode**: when you run `quelle` from a source checkout (`uv run quelle …` inside the repo), the `.env` at the repo root is still picked up — the same ergonomics as before — but downloaded PDFs and the cache go into a repo-local `.dev-state/` directory so your installed user data stays clean.
+
+**Migration from PublicationManager**: if you upgraded from the old `publication-manager` package, the first run of `quelle` automatically moves your `~/.config/publications/.env` and `~/.publications/.publications-state/` into the new locations. No data loss, no manual steps.
 
 ## Usage
 
 ```bash
 # Resolve by DOI (uses OpenAlex + Crossref enrichment by default).
-publications fetch 10.1109/83.902291
+quelle fetch 10.1109/83.902291
 
-# Resolve by arXiv id, with PDF download into .publications-state/pdfs/.
-publications fetch 1706.03762 --download-pdf
+# Resolve by arXiv id, with PDF download into the data dir.
+quelle fetch 1706.03762 --download-pdf
 
 # Resolve by free-text title.
-publications fetch "The Perceptron: A Probabilistic Model" --json
+quelle fetch "The Perceptron: A Probabilistic Model" --json
 
 # Bypass the local cache and force network.
-publications fetch 10.xxxx/yyyy --no-cache
+quelle fetch 10.xxxx/yyyy --no-cache
 
 # Inspect the cache.
-publications cache stats
-publications cache list --limit 20
-publications cache show 10.1109/83.902291
-publications cache clear --yes
+quelle cache stats
+quelle cache list --limit 20
+quelle cache show 10.1109/83.902291
+quelle cache clear --yes
 ```
 
-## Configuration
+## Claude Code skill
 
-Settings are loaded from `.env` files and process env, in priority order:
-
-1. `~/.config/publications/.env` — user-level
-2. `$PUBLICATIONS_HOME/.env` — repo-level
-3. Process environment variables
-
-The only variable worth setting by default is `PUBLICATIONS_CONTACT_EMAIL` — it goes into the `User-Agent` header and enrolls you in the Crossref / OpenAlex polite pool. See [`.env.example`](.env.example) for the full list.
+A minimal example [`SKILL.md`](skills/quelle/SKILL.md) ships in `skills/quelle/` — drop it into `~/.claude/skills/quelle/` (or `<project>/.claude/skills/quelle/`) to use the CLI from a Claude Code session. It's deliberately thin: resolve the paper, print the metadata, stop. Adapt the last step for your own downstream workflow (Zettelkasten import, BibTeX append, etc.).
 
 ## Layout
 
 ```
-app/
+quelle/
   models/        <- Publication, Author (pure dataclasses)
   repositories/
     cache.py           <- SQLite cache keyed by DOI / arXiv / title
@@ -87,8 +124,11 @@ app/
     resolver.py         <- Source orchestration + enrichment chain + cache lookup
     pdf_resolver.py     <- Lazy PDF fallback chain
   cli/
-    main.py             <- Typer app (fetch, cache, version, config)
+    main.py             <- Typer app (fetch, cache, version, init)
+    config.py           <- `config show` / `path` / `edit` + bootstrap
     output.py           <- JSON vs rich TTY rendering
+  paths.py              <- platformdirs resolution (config / data / cache)
+  migrate.py            <- One-shot migration from the legacy PublicationManager layout
   settings.py           <- environs-layered config
 tests/
 ```
@@ -113,13 +153,13 @@ This tool is intended for **personal and academic research use**. It queries fre
 
 | Source | Data licence | Rate limit | Attribution | Notes |
 |---|---|---|---|---|
-| [OpenAlex](https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication) | CC0 — *"OpenAlex data is and will remain available at no cost"* | ~100k / day on the polite pool; single-entity lookups unlimited | not required | Provide an email via `PUBLICATIONS_CONTACT_EMAIL` for the polite pool, or set `OPENALEX_API_KEY` for the new key-based tier (OpenAlex announced in January 2026 that key authentication is replacing the mailto polite pool; the tool supports both). |
+| [OpenAlex](https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication) | CC0 — *"OpenAlex data is and will remain available at no cost"* | ~100k / day on the polite pool; single-entity lookups unlimited | not required | Provide an email via `QUELLE_CONTACT_EMAIL` for the polite pool, or set `OPENALEX_API_KEY` for the new key-based tier (OpenAlex announced in January 2026 that key authentication is replacing the mailto polite pool; the tool supports both). |
 | [Crossref REST](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) | CC0 for metadata — *"almost none of the metadata is subject to copyright, and you may use it for any purpose"*. Some abstracts may remain copyrighted. | No hard cap; the polite pool is requested via your `mailto=` / User-Agent | not required, but recommended | Commercial users who need SLAs should subscribe to Metadata Plus directly with Crossref. |
 | [arXiv API](https://info.arxiv.org/help/api/tou.html) | Metadata CC0. PDFs retain their authors' / arXiv's licence. | **1 request / 3 seconds** (the tool enforces this globally via a module-level lock) | Do not claim arXiv endorses your project. | **You may not store and re-serve arXiv e-prints (PDFs, source files, other content) from your own servers unless you have the copyright holder's permission.** Downloading for local personal reading is explicitly allowed. |
 | [Semantic Scholar](https://www.semanticscholar.org/product/api/license) | S2 data may be `CC BY-NC` or `ODC-BY` depending on the record. The API itself is provided *"AS IS, WITH ALL FAULTS, AND AS AVAILABLE"* with no warranty. | Public endpoints need no auth; higher throughput requires a free key from Ai2. | **Required** — *"Licensee will include an attribution to 'Semantic Scholar'"*, and publications must cite *The Semantic Scholar Open Data Platform*. | You may not *"repackage, sell, rent, lease, lend, distribute, or sublicense the API"*. This tool is a personal client, not a proxy. |
 | [Unpaywall](https://unpaywall.org/products/api) | CC0 data | 100k requests / day | not required | The email parameter is **mandatory** — Unpaywall uses it to contact you if something goes wrong. Don't fake it. For bulk workloads, download the free data snapshot instead of hammering the API. |
 
-**Google Scholar is not supported.** Google Scholar has no official API, and Google's Terms of Service prohibit automated access. Passing a Scholar URL to `publications fetch` returns a `UserError` asking you to copy the paper title manually and retry — OpenAlex and Crossref together cover almost every paper with a DOI, so the workaround is usually one extra copy-paste.
+**Google Scholar is not supported.** Google Scholar has no official API, and Google's Terms of Service prohibit automated access. Passing a Scholar URL to `quelle fetch` returns a `UserError` asking you to copy the paper title manually and retry — OpenAlex and Crossref together cover almost every paper with a DOI, so the workaround is usually one extra copy-paste.
 
 **No warranty**: see the MIT [`LICENSE`](LICENSE) — this tool is provided as-is, with no guarantee that its JSON output is correct, complete, or current. Verify critical metadata against the canonical upstream before relying on it.
 

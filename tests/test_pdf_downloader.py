@@ -7,8 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.repositories.errors import NetworkError
-from app.repositories.pdf_downloader import download_pdf
+from quelle.repositories.errors import NetworkError
+from quelle.repositories.pdf_downloader import download_pdf
 
 
 def _make_client(handler) -> httpx.Client:

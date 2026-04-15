@@ -20,9 +20,9 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
-from app.models.publication import Author, Publication
-from app.repositories.errors import NetworkError, NotFoundError
-from app.settings import Settings
+from quelle.models.publication import Author, Publication
+from quelle.repositories.errors import NetworkError, NotFoundError
+from quelle.settings import Settings
 
 QUERY_URL = "https://export.arxiv.org/api/query"
 

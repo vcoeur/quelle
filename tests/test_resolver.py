@@ -11,9 +11,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from app.repositories.errors import UserError
-from app.services.resolver import _extract_doi, resolve
-from app.settings import Settings
+from quelle.repositories.errors import UserError
+from quelle.services.resolver import _extract_doi, resolve
+from quelle.settings import Settings
 
 
 def test_extract_doi_bare() -> None:
