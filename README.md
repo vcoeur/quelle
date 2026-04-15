@@ -27,10 +27,11 @@ Python 3.12+, `uv`-managed. Typer (CLI) + httpx (sync HTTP) + stdlib `sqlite3` (
 Install from PyPI:
 
 ```bash
-pip install quelle
+pipx install quelle
+# or: uv tool install quelle
 ```
 
-Run the one-time bootstrap to create the config, data, and cache directories and seed a default `.env`:
+Both install `quelle` into its own isolated venv and put it on your `$PATH`. Run the one-time bootstrap to create the config, data, and cache directories and seed a default `.env`:
 
 ```bash
 quelle init
