@@ -274,6 +274,80 @@ def test_fuzzy_merge_skips_when_no_authors(monkeypatch: pytest.MonkeyPatch) -> N
     assert len(result) == 2
 
 
+def test_type_book_drops_article_hits_from_multi_type_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenAlex covers both kinds — when --type book, article hits must be filtered out."""
+    monkeypatch.setattr(
+        search_service,
+        "SOURCES",
+        {
+            "openalex": (
+                lambda *_a, **_k: [
+                    _hit(
+                        source="openalex",
+                        rank=0,
+                        title="A review of Cannibal Capitalism",
+                        type_="article",
+                        doi="10.1/review",
+                        author="Brian Milstein",
+                    ),
+                    _hit(
+                        source="openalex",
+                        rank=1,
+                        title="Cannibal Capitalism",
+                        type_="book",
+                        isbn_13="9781839761232",
+                        author="Nancy Fraser",
+                    ),
+                ],
+                {"article", "book"},
+            ),
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x", type="book")  # type: ignore[arg-type]
+    titles = {h.title for h in result}
+    assert "A review of Cannibal Capitalism" not in titles
+    assert "Cannibal Capitalism" in titles
+    assert all(h.type in {"book", "unknown"} for h in result)
+
+
+def test_type_book_keeps_unknown_hits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An `unknown`-typed hit (type disagreement at merge time) is not dropped."""
+    monkeypatch.setattr(
+        search_service,
+        "SOURCES",
+        {
+            "openalex": (
+                lambda *_a, **_k: [
+                    _hit(source="openalex", rank=0, title="Maybe", type_="unknown"),
+                ],
+                {"article", "book"},
+            ),
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x", type="book")  # type: ignore[arg-type]
+    assert [h.title for h in result] == ["Maybe"]
+
+
+def test_kind_hint_threaded_to_openalex(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Service should pass `kind` to OpenAlex so it can add API-side type filtering."""
+    captured: dict[str, object] = {}
+
+    def fake_openalex(client, settings, query, *, author=None, kind=None, limit=20):
+        captured["kind"] = kind
+        captured["author"] = author
+        return []
+
+    monkeypatch.setattr(
+        search_service,
+        "SOURCES",
+        {"openalex": (fake_openalex, {"article", "book"})},
+    )
+    search_service.search(client=None, settings=None, query="x", type="book")  # type: ignore[arg-type]
+    assert captured["kind"] == "book"
+
+
 def test_default_limit_returns_three(monkeypatch: pytest.MonkeyPatch) -> None:
     """The service default `limit` is 3 (matches the CLI default)."""
     _patch_sources(

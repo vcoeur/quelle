@@ -85,14 +85,18 @@ def search(
     query: str,
     *,
     author: str | None = None,
+    kind: str | None = None,
     limit: int = 20,
 ) -> list[SearchHit]:
     """Return up to `limit` candidate hits for a free-text query.
 
     Semantic Scholar's `paper/search` endpoint has no separate author
     filter, so an `author` hint is folded into the query string.
+    `kind` is accepted for signature uniformity but ignored — the
+    endpoint only returns scholarly articles.
     """
     del settings  # auth header path not yet wired through get_json
+    del kind
     full_query = f"{query} {author}".strip() if author else query
     url = f"{API_BASE}/paper/search"
     payload = get_json(

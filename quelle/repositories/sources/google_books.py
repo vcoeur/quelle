@@ -54,6 +54,7 @@ def search(
     query: str,
     *,
     author: str | None = None,
+    kind: str | None = None,
     limit: int = 20,
 ) -> list[SearchHit]:
     """Return up to `limit` candidate hits for a free-text query.
@@ -61,8 +62,10 @@ def search(
     Uses Google Books' field qualifiers (`intitle:` for the query and
     `inauthor:` when an author hint is provided) so the underlying
     relevance ranker biases on each field rather than mashing them
-    into a single bag-of-words.
+    into a single bag-of-words. `kind` is accepted for signature
+    uniformity but ignored — Google Books only indexes books.
     """
+    del kind
     parts = [f"intitle:{query}"]
     if author:
         parts.append(f"inauthor:{author}")

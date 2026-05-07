@@ -86,14 +86,18 @@ def search(
     query: str,
     *,
     author: str | None = None,
+    kind: str | None = None,
     limit: int = 20,
 ) -> list[SearchHit]:
     """Return up to `limit` candidate hits for a free-text query.
 
     `author`, when provided, is added with the `au:` qualifier; the
     title query uses `ti:` so multi-word inputs aren't broken up.
+    `kind` is accepted for signature uniformity but ignored — arXiv
+    only carries preprints.
     """
     del settings
+    del kind
     parts = [f'ti:"{query}"']
     if author:
         parts.append(f'au:"{author}"')

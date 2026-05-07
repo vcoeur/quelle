@@ -84,20 +84,32 @@ def search(
     query: str,
     *,
     author: str | None = None,
+    kind: str | None = None,
     limit: int = 20,
 ) -> list[SearchHit]:
     """Return up to `limit` candidate hits for a free-text query.
 
     `author`, when provided, narrows results via OpenAlex's
-    `author.display_name.search` filter.
+    `author.display_name.search` filter. `kind` (one of `book` /
+    `article`) adds a `type:` filter so OpenAlex's relevance ranker
+    doesn't surface articles when the user explicitly asked for books
+    or vice versa.
     """
+    filters: list[str] = []
+    if author:
+        filters.append(f"author.display_name.search:{author}")
+    if kind == "book":
+        filters.append("type:book|book-chapter")
+    elif kind == "article":
+        filters.append("type:article|preprint")
+
     params: dict[str, str] = {
         "search": query,
         "per-page": str(limit),
         **_auth_params(settings),
     }
-    if author:
-        params["filter"] = f"author.display_name.search:{author}"
+    if filters:
+        params["filter"] = ",".join(filters)
     payload = get_json(client, WORKS_URL, params=params)
     results = payload.get("results") or []
     return [_to_search_hit(work, rank) for rank, work in enumerate(results)]

@@ -65,10 +65,16 @@ def search(
     query: str,
     *,
     author: str | None = None,
+    kind: str | None = None,
     limit: int = 20,
 ) -> list[SearchHit]:
-    """Return up to `limit` candidate book hits for a free-text title query."""
+    """Return up to `limit` candidate book hits for a free-text title query.
+
+    `kind` is accepted for signature uniformity but ignored — Open
+    Library only indexes books.
+    """
     del settings
+    del kind
     params: dict[str, str] = {"title": query, "limit": str(limit)}
     if author:
         params["author"] = author
