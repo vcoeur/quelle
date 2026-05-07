@@ -22,12 +22,23 @@ quelle fetch 1706.03762
 # Free-text title — OpenAlex title search, Crossref fallback.
 quelle fetch "The Perceptron: A Probabilistic Model" --json
 
+# Bias resolution toward books for an ambiguous title (delegates to `quelle search`).
+quelle fetch "Cannibal Capitalism" --type book
+
+# Comma in the query splits title from a single-name author hint.
+quelle fetch "Cannibal Capitalism, Fraser" --type book
+
+# Explicit --author (disables the comma heuristic).
+quelle fetch "Cannibal Capitalism" --author Fraser --type book
+
 # Force a network round-trip even if the cache has an entry.
 quelle fetch 10.xxxx/yyyy --no-cache
 
 # Download the PDF into the data dir (fallback chain: OpenAlex → arXiv → Unpaywall).
 quelle fetch 1706.03762 --download-pdf
 ```
+
+`--type book|article|all` and `--author` only affect free-text queries — explicit DOI / ISBN / arXiv id queries always resolve directly. When set, fetch picks the top hit from `quelle search` (with the same `--type` / `--author` filters) and recurses into the regular id-based resolver to populate the full `Publication`. The title-based cache lookup is skipped in that case so a previously-cached article-on-this-title doesn't short-circuit the disambiguation.
 
 Google Scholar URLs are **not supported**: Scholar has no public API and its ToS prohibits automated access. If you only have a Scholar link, copy the paper title and feed that to `quelle fetch` — OpenAlex and Crossref together cover almost every paper with a DOI.
 

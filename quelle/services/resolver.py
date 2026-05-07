@@ -23,7 +23,8 @@ from dataclasses import replace
 import httpx
 
 from quelle._isbn import isbn10_to_13, isbn13_to_10
-from quelle.models.publication import Publication
+from quelle.models.publication import Author, Publication
+from quelle.models.search import MergedHit
 from quelle.repositories.cache import Cache
 from quelle.repositories.errors import NetworkError, NotFoundError, PublicationsError, UserError
 from quelle.repositories.sources import (
@@ -43,8 +44,23 @@ _SCHOLAR_HOST_RE = re.compile(r"scholar\.google\.\w+", re.IGNORECASE)
 _ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
 
 
-def resolve(client: httpx.Client, settings: Settings, query: str) -> Publication:
-    """Route a query to a single source and return its Publication."""
+def resolve(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    *,
+    type_hint: str | None = None,
+    author: str | None = None,
+) -> Publication:
+    """Route a query to a single source and return its Publication.
+
+    `type_hint` (`book` or `article`) and `author` only affect the
+    free-text path: when either is set, the query is run through the
+    multi-source search service and the top hit is recursively
+    resolved via its DOI / ISBN / arXiv id. Explicit identifier
+    queries (DOI, ISBN, arXiv id) ignore both hints and resolve
+    directly.
+    """
     stripped = query.strip()
 
     if _SCHOLAR_HOST_RE.search(stripped):
@@ -68,7 +84,72 @@ def resolve(client: httpx.Client, settings: Settings, query: str) -> Publication
     if _ARXIV_RE.match(stripped):
         return arxiv.fetch_by_arxiv_id(client, settings, stripped)
 
+    if type_hint is not None or author is not None:
+        return _resolve_via_search(client, settings, stripped, type_hint, author)
+
     return openalex.search_by_title(client, settings, stripped)
+
+
+def _resolve_via_search(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    type_hint: str | None,
+    author: str | None,
+) -> Publication:
+    """Pick the top multi-source hit for a typed/authored query and resolve it.
+
+    If the top hit carries any of DOI / ISBN-13 / ISBN-10 / arXiv id,
+    we recurse into the regular id-based resolvers so the returned
+    Publication is fully populated. If the hit only has a source-native
+    id (e.g. an Open Library Work key), we synthesise a minimal
+    Publication from the SearchHit fields — the user gets back what
+    the search saw, just less rich than a DOI/ISBN-anchored fetch.
+    """
+    from quelle.services.search import search as multi_search
+
+    type_value = type_hint or "all"
+    hits = multi_search(
+        client,
+        settings,
+        query,
+        author=author,
+        type=type_value,  # type: ignore[arg-type]
+        limit=1,
+    )
+    if not hits:
+        raise NotFoundError(f"no match for {query!r} (type={type_value}, author={author!r})")
+    top = hits[0]
+    if top.doi:
+        return openalex.fetch_by_doi(client, settings, top.doi)
+    if top.isbn_13 or top.isbn_10:
+        return _resolve_book_primary(client, settings, top.isbn_13 or top.isbn_10)
+    if top.arxiv_id:
+        return arxiv.fetch_by_arxiv_id(client, settings, top.arxiv_id)
+    return _publication_from_merged_hit(top)
+
+
+def _publication_from_merged_hit(hit: MergedHit) -> Publication:
+    """Synthesise a Publication from a search hit with no fetchable identifier.
+
+    Fields not carried by SearchHit (abstract, citation count, OA flag,
+    PDF URL, venue) stay `None` / `[]`. The returned record is
+    intentionally shallow — the user should pass it through enrichment
+    or copy the title to a richer source if more is needed.
+    """
+    kind = hit.type if hit.type in {"book", "article"} else None
+    authors = [Author(name=a.name, orcid=a.orcid, affiliation=a.affiliation) for a in hit.authors]
+    return Publication(
+        title=hit.title,
+        authors=authors,
+        year=hit.year,
+        kind=kind,
+        doi=hit.doi,
+        isbn_10=hit.isbn_10,
+        isbn_13=hit.isbn_13,
+        arxiv_id=hit.arxiv_id,
+        resolved_from_chain=list(hit.sources),
+    )
 
 
 def _resolve_book_primary(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
@@ -100,12 +181,17 @@ def resolve_with_enrichment(
     query: str,
     *,
     cache: Cache | None = None,
+    type_hint: str | None = None,
+    author: str | None = None,
 ) -> Publication:
     """Resolve then enrich.
 
     If `cache` is provided, check it by DOI / OpenAlex id / arXiv id
     / exact title before calling any upstream source. On a miss, run
-    the full chain and upsert the result.
+    the full chain and upsert the result. When `type_hint` or `author`
+    is set, the title-based cache fallback is skipped — the user is
+    explicitly disambiguating, and a stale title-keyed cache entry
+    might have been resolved without the same hint.
 
     1. Run the primary resolver.
     2. If we started on arXiv and have no DOI, try OpenAlex title
@@ -116,11 +202,11 @@ def resolve_with_enrichment(
        Semantic Scholar.
     """
     if cache is not None:
-        hit = _lookup_in_cache(cache, query)
+        hit = _lookup_in_cache(cache, query, type_hint=type_hint, author=author)
         if hit is not None:
             return hit
 
-    primary = resolve(client, settings, query)
+    primary = resolve(client, settings, query, type_hint=type_hint, author=author)
     current = primary
 
     if current.kind in {"book", "book-chapter"}:
@@ -219,8 +305,21 @@ def _book_record_complete(record: Publication) -> bool:
     return bool(record.publisher and record.year and (record.abstract or record.subjects))
 
 
-def _lookup_in_cache(cache: Cache, query: str) -> Publication | None:
-    """Try every cache lookup route for the given query string."""
+def _lookup_in_cache(
+    cache: Cache,
+    query: str,
+    *,
+    type_hint: str | None = None,
+    author: str | None = None,
+) -> Publication | None:
+    """Try every cache lookup route for the given query string.
+
+    Identifier-based lookups (DOI / ISBN / arXiv id / OpenAlex id) are
+    always honoured — those are unambiguous. The title-fallback is
+    skipped when `type_hint` or `author` is set, since a cached entry
+    keyed by the exact title may have been resolved without that hint
+    and would short-circuit the explicit disambiguation.
+    """
     stripped = query.strip()
     isbn = _extract_isbn(stripped)
     if isbn:
@@ -242,6 +341,8 @@ def _lookup_in_cache(cache: Cache, query: str) -> Publication | None:
         )
         if hit is not None:
             return hit
+    if type_hint is not None or author is not None:
+        return None
     return cache.get_by_title_exact(stripped)
 
 
