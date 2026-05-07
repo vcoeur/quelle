@@ -12,11 +12,23 @@ from typing import Any
 import httpx
 
 from quelle.models.publication import Author, Publication
+from quelle.models.search import SearchHit
 from quelle.repositories.errors import NotFoundError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
 API_BASE = "https://api.semanticscholar.org/graph/v1"
+SOURCE_NAME = "semantic_scholar"
+
+_SEARCH_FIELDS = ",".join(
+    [
+        "paperId",
+        "externalIds",
+        "title",
+        "year",
+        "authors.name",
+    ]
+)
 
 _FIELDS = ",".join(
     [
@@ -65,6 +77,58 @@ def fetch_by_doi(client: httpx.Client, settings: Settings, doi: str) -> Publicat
     url = f"{API_BASE}/paper/DOI:{doi}"
     payload = get_json(client, url, params={"fields": _FIELDS})
     return _to_publication(payload)
+
+
+def search(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    *,
+    author: str | None = None,
+    limit: int = 20,
+) -> list[SearchHit]:
+    """Return up to `limit` candidate hits for a free-text query.
+
+    Semantic Scholar's `paper/search` endpoint has no separate author
+    filter, so an `author` hint is folded into the query string.
+    """
+    del settings  # auth header path not yet wired through get_json
+    full_query = f"{query} {author}".strip() if author else query
+    url = f"{API_BASE}/paper/search"
+    payload = get_json(
+        client,
+        url,
+        params={
+            "query": full_query,
+            "limit": str(limit),
+            "fields": _SEARCH_FIELDS,
+        },
+    )
+    data = payload.get("data") or []
+    return [_to_search_hit(paper, rank) for rank, paper in enumerate(data)]
+
+
+def _to_search_hit(paper: dict[str, Any], rank: int) -> SearchHit:
+    """Map a Semantic Scholar paper JSON into a `SearchHit`."""
+    authors: list[Author] = []
+    for entry in paper.get("authors") or []:
+        name = entry.get("name") or ""
+        if name:
+            authors.append(Author(name=name))
+
+    external = paper.get("externalIds") or {}
+    doi = external.get("DOI")
+    return SearchHit(
+        title=paper.get("title") or "",
+        authors=authors,
+        year=paper.get("year"),
+        type="article",
+        doi=(doi or "").lower() or None,
+        arxiv_id=external.get("ArXiv"),
+        source=SOURCE_NAME,
+        source_id=paper.get("paperId") or "",
+        raw_rank=rank,
+    )
 
 
 def _to_publication(paper: dict[str, Any]) -> Publication:

@@ -1,6 +1,6 @@
 [project]
 name = "quelle"
-version = "0.2.0"
+version = "0.3.0"
 description = "Fetch publication and book metadata + PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and return normalised JSON"
 readme = "README.md"
 license = { text = "MIT" }

@@ -27,8 +27,10 @@ from quelle.cli.output import (
     render_cache_list,
     render_config,
     render_publication,
+    render_search,
 )
 from quelle.models.publication import Publication
+from quelle.models.search import MergedHit
 from quelle.repositories.cache import Cache
 from quelle.repositories.errors import (
     CacheError,
@@ -39,6 +41,7 @@ from quelle.repositories.errors import (
     UserError,
 )
 from quelle.repositories.http_client import build_client
+from quelle.services import search as search_service
 from quelle.services.resolver import resolve_with_enrichment
 from quelle.settings import Settings, load_settings
 
@@ -188,6 +191,69 @@ def fetch(
     render_publication(_publication_to_dict(publication), mode=mode)
 
 
+@app.command()
+def search(
+    query: str = typer.Argument(
+        ...,
+        help="Free-text title query (or any text the sources accept).",
+    ),
+    author: str = typer.Option(
+        None,
+        "--author",
+        help="Author hint, used as a native filter where supported.",
+    ),
+    result_type: str = typer.Option(
+        "all",
+        "--type",
+        help="Restrict to book / article sources, or query both. One of: book, article, all.",
+    ),
+    limit: int = typer.Option(10, "--limit", help="Number of merged hits to return."),
+    source: list[str] = typer.Option(
+        None, "--source", help="Repeatable. Restrict to named sources."
+    ),
+    no_source: list[str] = typer.Option(
+        None, "--no-source", help="Repeatable. Exclude named sources."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
+) -> None:
+    """List candidate publications across multiple open sources.
+
+    Hits from each source are merged via Reciprocal Rank Fusion and
+    deduplicated by DOI / ISBN-13 / arXiv id. Each line ends with an
+    `id:` value that can be passed to `quelle fetch`.
+    """
+    if result_type not in {"book", "article", "all"}:
+        _report(UserError(f"--type must be one of: book, article, all (got {result_type!r})"))
+        raise typer.Exit(1)
+
+    settings = _load()
+    mode = OutputMode.detect(json_output)
+    try:
+        with build_client(settings) as client:
+            hits = search_service.search(
+                client,
+                settings,
+                query,
+                author=author,
+                type=result_type,  # type: ignore[arg-type]
+                sources=source or None,
+                no_sources=no_source or None,
+                limit=limit,
+            )
+    except PublicationsError as exc:
+        _report(exc)
+        raise typer.Exit(_exit_code(exc)) from exc
+
+    payload = {
+        "query": query,
+        "author": author,
+        "type": result_type,
+        "limit": limit,
+        "hits": [_hit_to_dict(rank, hit) for rank, hit in enumerate(hits, start=1)],
+    }
+    render_search(payload, mode=mode)
+
+
 @cache_app.command("stats")
 def cache_stats(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
@@ -257,6 +323,36 @@ def _publication_to_dict(publication: Publication) -> dict:
     data = asdict(publication)
     data["citation_key"] = publication.citation_key()
     return data
+
+
+def _hit_to_dict(rank: int, hit: MergedHit) -> dict:
+    """Flatten a MergedHit dataclass for output rendering."""
+    pref = hit.preferred_id()
+    if pref is None:
+        id_str: str | None = None
+        resolvable = False
+    else:
+        kind, value = pref
+        id_str = f"{kind}:{value}"
+        resolvable = kind in {"doi", "isbn", "arxiv"}
+    return {
+        "rank": rank,
+        "title": hit.title,
+        "authors": [asdict(a) for a in hit.authors],
+        "year": hit.year,
+        "type": hit.type,
+        "id": id_str,
+        "id_resolvable": resolvable,
+        "ids": {
+            "doi": hit.doi,
+            "isbn_13": hit.isbn_13,
+            "isbn_10": hit.isbn_10,
+            "arxiv_id": hit.arxiv_id,
+        },
+        "sources": list(hit.sources),
+        "source_ids": dict(hit.source_ids),
+        "score": round(hit.score, 6),
+    }
 
 
 if __name__ == "__main__":

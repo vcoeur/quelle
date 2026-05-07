@@ -12,11 +12,13 @@ from typing import Any
 import httpx
 
 from quelle.models.publication import Author, Publication
+from quelle.models.search import HitType, SearchHit
 from quelle.repositories.errors import NotFoundError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
 WORKS_URL = "https://api.openalex.org/works"
+SOURCE_NAME = "openalex"
 
 
 def _auth_params(settings: Settings) -> dict[str, str]:
@@ -74,6 +76,63 @@ def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Public
     if not results:
         raise NotFoundError(f"no OpenAlex book match for ISBN: {isbn}")
     return _to_publication(results[0])
+
+
+def search(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    *,
+    author: str | None = None,
+    limit: int = 20,
+) -> list[SearchHit]:
+    """Return up to `limit` candidate hits for a free-text query.
+
+    `author`, when provided, narrows results via OpenAlex's
+    `author.display_name.search` filter.
+    """
+    params: dict[str, str] = {
+        "search": query,
+        "per-page": str(limit),
+        **_auth_params(settings),
+    }
+    if author:
+        params["filter"] = f"author.display_name.search:{author}"
+    payload = get_json(client, WORKS_URL, params=params)
+    results = payload.get("results") or []
+    return [_to_search_hit(work, rank) for rank, work in enumerate(results)]
+
+
+def _to_search_hit(work: dict[str, Any], rank: int) -> SearchHit:
+    """Map an OpenAlex work JSON into a `SearchHit`."""
+    authorships = work.get("authorships") or []
+    authors: list[Author] = []
+    for entry in authorships:
+        author = entry.get("author") or {}
+        name = author.get("display_name") or ""
+        if name:
+            authors.append(Author(name=name, orcid=author.get("orcid")))
+
+    work_type = _normalise_kind(work.get("type"))
+    hit_type: HitType
+    if work_type in {"book", "book-chapter"}:
+        hit_type = "book"
+    elif work_type in {"article", "preprint"}:
+        hit_type = "article"
+    else:
+        hit_type = "unknown"
+
+    return SearchHit(
+        title=work.get("title") or work.get("display_name") or "",
+        authors=authors,
+        year=work.get("publication_year"),
+        type=hit_type,
+        doi=_strip_doi(work.get("doi")),
+        arxiv_id=_extract_arxiv_id(work),
+        source=SOURCE_NAME,
+        source_id=work.get("id") or "",
+        raw_rank=rank,
+    )
 
 
 def _to_publication(work: dict[str, Any]) -> Publication:

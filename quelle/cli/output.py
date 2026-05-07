@@ -112,6 +112,41 @@ def render_config(payload: dict[str, Any], *, mode: OutputMode) -> None:
     _console.print(table)
 
 
+def render_search(payload: dict[str, Any], *, mode: OutputMode) -> None:
+    """Render a numbered list of search hits, or emit JSON."""
+    if mode.json:
+        emit_json(payload)
+        return
+    hits = payload.get("hits") or []
+    if not hits:
+        _console.print("[dim]no matches[/dim]")
+        return
+    for entry in hits:
+        rank = entry.get("rank")
+        title = entry.get("title") or "(no title)"
+        authors = entry.get("authors") or []
+        authors_line = ", ".join(a.get("name", "") for a in authors[:3])
+        if len(authors) > 3:
+            authors_line += " et al."
+        year = entry.get("year")
+        hit_type = entry.get("type") or "unknown"
+        sources = entry.get("sources") or []
+        id_str = entry.get("id") or "[dim]—[/dim]"
+        resolvable = entry.get("id_resolvable", True)
+        suffix = "" if resolvable else "[yellow]*[/yellow]"
+
+        head = f"[bold]{rank}.[/bold] {title}"
+        meta_bits = []
+        if authors_line:
+            meta_bits.append(authors_line)
+        if year:
+            meta_bits.append(str(year))
+        meta_bits.append(f"[dim]\\[{hit_type}][/dim]")
+        _console.print(f"{head} — {' · '.join(meta_bits)}")
+        sources_line = ", ".join(sources)
+        _console.print(f"   id: [cyan]{id_str}[/cyan]{suffix}   sources: [dim]{sources_line}[/dim]")
+
+
 def render_cache_list(payload: dict[str, Any], *, mode: OutputMode) -> None:
     """Render a list of cache entries."""
     if mode.json:
