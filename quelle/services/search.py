@@ -14,6 +14,7 @@ fusion logic. Adapters stay ignorant of one another; the resolver
 from __future__ import annotations
 
 import logging
+import unicodedata
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
@@ -60,7 +61,7 @@ def search(
     type: SearchType = "all",
     sources: list[str] | None = None,
     no_sources: list[str] | None = None,
-    limit: int = 10,
+    limit: int = 3,
 ) -> list[MergedHit]:
     """Run a multi-source search and return up to `limit` merged hits.
 
@@ -91,6 +92,7 @@ def search(
             raw.append(hits)
 
     merged = _merge(raw)
+    merged = _dedup_by_similarity(merged)
     merged.sort(key=_sort_key)
     return merged[:limit]
 
@@ -240,6 +242,113 @@ def _absorb(merged: MergedHit, hit: SearchHit) -> MergedHit:
         sources=sources,
         source_ids=source_ids,
         score=merged.score + _rrf_term(hit.raw_rank),
+    )
+
+
+def _dedup_by_similarity(merged: list[MergedHit]) -> list[MergedHit]:
+    """Second-pass merge for hits with no shared identifier.
+
+    Groups by (normalised title, first-author surname). Within each
+    group, folds every subsequent hit into the first one. Hits whose
+    similarity key is incomplete (empty title or no authors) skip the
+    grouping pass and survive untouched.
+
+    This catches cases where two sources return the same publication
+    but neither carries a DOI / ISBN / arXiv id (common for older
+    books, French-language editions, or sources that omit external
+    identifiers).
+    """
+    canonical: dict[tuple[str, str], int] = {}
+    survivors: list[MergedHit] = []
+    survived_indexes: list[int] = []
+
+    for hit in merged:
+        key = _similarity_key(hit)
+        if key is None:
+            survivors.append(hit)
+            survived_indexes.append(len(survivors) - 1)
+            continue
+        existing = canonical.get(key)
+        if existing is None:
+            survivors.append(hit)
+            canonical[key] = len(survivors) - 1
+        else:
+            survivors[existing] = _absorb_merged(survivors[existing], hit)
+
+    return survivors
+
+
+def _similarity_key(hit: MergedHit) -> tuple[str, str] | None:
+    """Build a (normalised-title, first-author-surname) key, or None if incomplete."""
+    title = _normalise_title(hit.title)
+    if not title or not hit.authors:
+        return None
+    surname = _surname(hit.authors[0].name)
+    if not surname:
+        return None
+    return title, surname
+
+
+def _normalise_title(title: str) -> str:
+    """Lowercase, drop diacritics + punctuation, collapse whitespace."""
+    folded = unicodedata.normalize("NFKD", title)
+    stripped = folded.encode("ascii", "ignore").decode("ascii").lower()
+    return " ".join("".join(ch if ch.isalnum() else " " for ch in stripped).split())
+
+
+def _surname(name: str) -> str:
+    """Extract the surname from a name; handle both `First Last` and `Last, First`.
+
+    BnF and some library catalogues return authors as `Camus, Albert`,
+    while OpenAlex / Google Books return `Albert Camus`. Both should
+    fold to `camus`.
+    """
+    if not name:
+        return ""
+    stripped = name.strip()
+    if "," in stripped:
+        last = stripped.split(",", 1)[0].strip()
+    else:
+        tokens = stripped.split()
+        last = tokens[-1] if tokens else ""
+    folded = unicodedata.normalize("NFKD", last)
+    return folded.encode("ascii", "ignore").decode("ascii").lower().strip(",.;")
+
+
+def _absorb_merged(base: MergedHit, other: MergedHit) -> MergedHit:
+    """Fold one MergedHit into another, combining sources and scores."""
+    sources = list(base.sources)
+    for src in other.sources:
+        if src not in sources:
+            sources.append(src)
+    source_ids = dict(base.source_ids)
+    for src, sid in other.source_ids.items():
+        source_ids.setdefault(src, sid)
+
+    authors = base.authors if len(base.authors) >= len(other.authors) else list(other.authors)
+    title = base.title or other.title
+
+    new_type: HitType = base.type
+    if base.type == "unknown":
+        new_type = other.type
+    elif other.type != "unknown" and other.type != base.type:
+        new_type = "unknown"
+
+    year = base.year if base.year is not None else other.year
+
+    return replace(
+        base,
+        title=title,
+        authors=_dedupe_authors(authors),
+        year=year,
+        type=new_type,
+        doi=base.doi or other.doi,
+        isbn_13=base.isbn_13 or other.isbn_13,
+        isbn_10=base.isbn_10 or other.isbn_10,
+        arxiv_id=base.arxiv_id or other.arxiv_id,
+        sources=sources,
+        source_ids=source_ids,
+        score=base.score + other.score,
     )
 
 

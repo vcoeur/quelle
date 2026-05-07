@@ -36,25 +36,30 @@ Google Scholar URLs are **not supported**: Scholar has no public API and its ToS
 Browse candidate matches across every wired open source. Use this when a free-text query is ambiguous and `quelle fetch` would commit to a single guess.
 
 ```bash
-# Free-text title across all sources, top 10.
+# Free-text title across all sources, top 3 results by default.
 quelle search "attention is all you need"
 
-# Narrow by type and author hint.
+# Comma in the query splits title from a single-name author hint.
+quelle search "etranger, camus" --type book
+
+# Explicit --author flag (disables the comma heuristic).
 quelle search "etranger" --author camus --type book
 
-# Restrict to specific sources, JSON output.
-quelle search "transformer" --limit 5 --source openalex --source arxiv --json
+# Restrict to specific sources and widen the result list.
+quelle search "transformer" --limit 10 --source openalex --source arxiv --json
 ```
 
-Each hit is a publication merged across the sources that returned it. Hits from each source are merged via Reciprocal Rank Fusion (k=60) and deduplicated by DOI / ISBN-13 / arXiv id. The `id:` line on each hit is `doi:…`, `isbn:…`, or `arxiv:…` when one of those identifiers is available — copy that value back into `quelle fetch <id>` to resolve the full record.
+Each hit is a publication merged across the sources that returned it. Hits are merged in two passes: first by exact identifier (DOI / ISBN-13 / arXiv id), then by similarity (normalised title + first-author surname, with diacritics folded). Cross-source ranking uses Reciprocal Rank Fusion (k=60). The `id:` line on each hit is `doi:…`, `isbn:…`, or `arxiv:…` when one of those identifiers is available — copy that value back into `quelle fetch <id>` to resolve the full record.
 
 Flags:
 
-- `--author TEXT` — author hint, threaded into native author fields where the source supports one (OpenAlex filter, Open Library `author=`, Google Books `inauthor:`, arXiv `au:`, BnF `bib.author`); otherwise folded into the query.
+- `--author TEXT` — author hint, threaded into native author fields where the source supports one (OpenAlex filter, Open Library `author=`, Google Books `inauthor:`, arXiv `au:`, BnF `bib.author`); otherwise folded into the query. Setting this flag disables the comma heuristic on the positional query.
 - `--type book|article|all` — restricts the source set. `all` (default) queries all six wired sources.
-- `--limit INTEGER` — final merged-list size. Default 10.
+- `--limit INTEGER` — final merged-list size. **Default 3.**
 - `--source NAME` / `--no-source NAME` — repeatable allow/deny lists. Names: `openalex`, `semantic_scholar`, `arxiv`, `open_library`, `google_books`, `bnf`.
-- `--json` — emit JSON.
+- `--json` — emit JSON. The text-mode output is three lines per hit (rank + title, byline, id + sources) with a blank line between entries.
+
+**Comma-split heuristic.** When `--author` is not given and the query contains a comma, the trailing piece is treated as an author hint if it is 1-3 tokens with no digits (so `"foo, smith"` splits, `"foo, 2024"` does not, `"foo, alpha beta gamma delta"` does not). The split is conservative on purpose — titles with internal commas survive as long as they do not end with a name-shaped fragment.
 
 If a single source fails (network error, rate limit), `quelle search` logs a warning and returns the merged hits from the remaining sources rather than failing the whole call.
 

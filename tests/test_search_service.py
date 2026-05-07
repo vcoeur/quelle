@@ -24,10 +24,11 @@ def _hit(
     arxiv_id: str | None = None,
     year: int | None = None,
     type_: str = "article",
+    author: str = "Anon",
 ) -> SearchHit:
     return SearchHit(
         title=title,
-        authors=[Author(name="Anon")],
+        authors=[Author(name=author)],
         year=year,
         type=type_,  # type: ignore[arg-type]
         doi=doi,
@@ -181,6 +182,110 @@ def test_sources_allowlist_narrows_query(monkeypatch: pytest.MonkeyPatch) -> Non
         client=None, settings=None, query="x", sources=["openalex"]
     )
     assert {hit.title for hit in result} == {"A"}
+
+
+def test_fuzzy_merge_collapses_same_title_and_surname(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two hits with no shared id but matching title + first-author surname merge."""
+    _patch_sources(
+        monkeypatch,
+        {
+            "open_library": [
+                _hit(
+                    source="open_library",
+                    rank=0,
+                    title="L'Étranger",
+                    type_="book",
+                    author="Albert Camus",
+                )
+            ],
+            "bnf": [
+                _hit(
+                    source="bnf",
+                    rank=0,
+                    title="L'Etranger",
+                    type_="book",
+                    author="Camus, Albert",
+                )
+            ],
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x")  # type: ignore[arg-type]
+    assert len(result) == 1
+    assert set(result[0].sources) == {"open_library", "bnf"}
+
+
+def test_fuzzy_merge_keeps_translations_separate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Different titles by the same author do NOT collapse — translation case."""
+    _patch_sources(
+        monkeypatch,
+        {
+            "open_library": [
+                _hit(
+                    source="open_library",
+                    rank=0,
+                    title="L'Étranger",
+                    type_="book",
+                    author="Albert Camus",
+                )
+            ],
+            "google_books": [
+                _hit(
+                    source="google_books",
+                    rank=0,
+                    title="The Stranger",
+                    type_="book",
+                    author="Albert Camus",
+                )
+            ],
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x")  # type: ignore[arg-type]
+    assert {hit.title for hit in result} == {"L'Étranger", "The Stranger"}
+
+
+def test_fuzzy_merge_skips_when_no_authors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Authorless hits with the same title should NOT collapse — too risky."""
+
+    def _no_author(source: str, title: str) -> SearchHit:
+        return SearchHit(
+            title=title,
+            authors=[],
+            type="book",
+            source=source,
+            source_id=f"{source}:{title}",
+            raw_rank=0,
+        )
+
+    monkeypatch.setattr(
+        search_service,
+        "SOURCES",
+        {
+            "open_library": (
+                lambda *_a, **_k: [_no_author("open_library", "Foo")],
+                {"book"},
+            ),
+            "google_books": (
+                lambda *_a, **_k: [_no_author("google_books", "Foo")],
+                {"book"},
+            ),
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x")  # type: ignore[arg-type]
+    assert len(result) == 2
+
+
+def test_default_limit_returns_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The service default `limit` is 3 (matches the CLI default)."""
+    _patch_sources(
+        monkeypatch,
+        {
+            "openalex": [
+                _hit(source="openalex", rank=i, title=f"T{i}", doi=f"10.1/{i}") for i in range(8)
+            ],
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x")  # type: ignore[arg-type]
+    assert len(result) == 3
 
 
 def test_dedup_by_isbn_collapses_book_hits(monkeypatch: pytest.MonkeyPatch) -> None:

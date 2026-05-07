@@ -207,7 +207,7 @@ def search(
         "--type",
         help="Restrict to book / article sources, or query both. One of: book, article, all.",
     ),
-    limit: int = typer.Option(10, "--limit", help="Number of merged hits to return."),
+    limit: int = typer.Option(3, "--limit", help="Number of merged hits to return."),
     source: list[str] = typer.Option(
         None, "--source", help="Repeatable. Restrict to named sources."
     ),
@@ -226,6 +226,13 @@ def search(
         _report(UserError(f"--type must be one of: book, article, all (got {result_type!r})"))
         raise typer.Exit(1)
 
+    effective_query = query
+    effective_author = author
+    if effective_author is None:
+        effective_query, parsed_author = _split_author_from_query(query)
+        if parsed_author is not None:
+            effective_author = parsed_author
+
     settings = _load()
     mode = OutputMode.detect(json_output)
     try:
@@ -233,8 +240,8 @@ def search(
             hits = search_service.search(
                 client,
                 settings,
-                query,
-                author=author,
+                effective_query,
+                author=effective_author,
                 type=result_type,  # type: ignore[arg-type]
                 sources=source or None,
                 no_sources=no_source or None,
@@ -245,13 +252,38 @@ def search(
         raise typer.Exit(_exit_code(exc)) from exc
 
     payload = {
-        "query": query,
-        "author": author,
+        "query": effective_query,
+        "author": effective_author,
         "type": result_type,
         "limit": limit,
         "hits": [_hit_to_dict(rank, hit) for rank, hit in enumerate(hits, start=1)],
     }
     render_search(payload, mode=mode)
+
+
+def _split_author_from_query(query: str) -> tuple[str, str | None]:
+    """Heuristic split of `"<title>, <author>"` into separate parts.
+
+    Returns the original query unchanged unless the trailing piece
+    after the last comma is a plausible single-name author (1-3
+    tokens, no digits). Designed so that titles legitimately
+    containing commas still survive when they end with substantive
+    content (e.g. `"Pride and Prejudice"` is unchanged), while a
+    `"title, surname"` shape is split.
+    """
+    last_comma = query.rfind(",")
+    if last_comma < 0:
+        return query, None
+    title = query[:last_comma].strip()
+    author = query[last_comma + 1 :].strip()
+    if not title or not author:
+        return query, None
+    tokens = author.split()
+    if not 1 <= len(tokens) <= 3:
+        return query, None
+    if any(any(ch.isdigit() for ch in token) for token in tokens):
+        return query, None
+    return title, author
 
 
 @cache_app.command("stats")
