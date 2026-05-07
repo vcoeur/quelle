@@ -138,3 +138,122 @@ def test_resolve_rejects_google_scholar_urls(scholar_url: str, tmp_settings: Set
             resolve(client, tmp_settings, scholar_url)
     finally:
         client.close()
+
+
+def test_resolve_with_type_hint_delegates_to_search(
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Free-text + --type book should pick the top book hit and recurse via ISBN."""
+    from quelle.models.publication import Author
+    from quelle.models.search import MergedHit
+    from quelle.repositories.sources import open_library
+    from quelle.services import search as search_service
+
+    captured_search: dict[str, object] = {}
+    captured_isbn: dict[str, object] = {}
+
+    def fake_search(client, settings, query, **kwargs):
+        captured_search["query"] = query
+        captured_search["type"] = kwargs.get("type")
+        captured_search["author"] = kwargs.get("author")
+        captured_search["limit"] = kwargs.get("limit")
+        return [
+            MergedHit(
+                title="Cannibal Capitalism",
+                authors=[Author(name="Nancy Fraser")],
+                year=2022,
+                type="book",
+                isbn_13="9781839761232",
+                sources=["open_library", "bnf"],
+            )
+        ]
+
+    def fake_isbn_fetch(client, settings, isbn):
+        captured_isbn["isbn"] = isbn
+        return Publication(title="Cannibal Capitalism", isbn_13=isbn, kind="book")
+
+    monkeypatch.setattr(search_service, "search", fake_search)
+    monkeypatch.setattr(open_library, "fetch_by_isbn", fake_isbn_fetch)
+
+    client = httpx.Client()
+    try:
+        result = resolve(
+            client,
+            tmp_settings,
+            "Cannibal Capitalism",
+            type_hint="book",
+            author="fraser",
+        )
+    finally:
+        client.close()
+
+    assert captured_search == {
+        "query": "Cannibal Capitalism",
+        "type": "book",
+        "author": "fraser",
+        "limit": 1,
+    }
+    assert captured_isbn["isbn"] == "9781839761232"
+    assert result.title == "Cannibal Capitalism"
+    assert result.isbn_13 == "9781839761232"
+
+
+def test_resolve_with_type_hint_synthesises_when_no_id(
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the top hit has no DOI/ISBN/arXiv id, fall back to a synthesised Publication."""
+    from quelle.models.publication import Author
+    from quelle.models.search import MergedHit
+    from quelle.services import search as search_service
+
+    fake = MergedHit(
+        title="Some Obscure Work",
+        authors=[Author(name="A. N. Other")],
+        year=1999,
+        type="book",
+        sources=["open_library"],
+        source_ids={"open_library": "/works/OL999W"},
+    )
+    monkeypatch.setattr(search_service, "search", lambda *a, **k: [fake])
+
+    client = httpx.Client()
+    try:
+        result = resolve(client, tmp_settings, "obscure work", type_hint="book")
+    finally:
+        client.close()
+
+    assert result.title == "Some Obscure Work"
+    assert result.kind == "book"
+    assert result.year == 1999
+    assert result.resolved_from_chain == ["open_library"]
+
+
+def test_resolve_explicit_id_ignores_type_hint(
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A query that's clearly an ISBN must resolve via the book chain regardless of --type."""
+    from quelle.repositories.sources import open_library
+    from quelle.services import search as search_service
+
+    monkeypatch.setattr(
+        search_service,
+        "search",
+        lambda *a, **k: pytest.fail("search should not be called for explicit ISBN"),
+    )
+    captured: dict[str, object] = {}
+
+    def fake_isbn_fetch(client, settings, isbn):
+        captured["isbn"] = isbn
+        return Publication(title="x", isbn_13=isbn, kind="book")
+
+    monkeypatch.setattr(open_library, "fetch_by_isbn", fake_isbn_fetch)
+
+    client = httpx.Client()
+    try:
+        resolve(client, tmp_settings, "9781839761232", type_hint="article")
+    finally:
+        client.close()
+    assert captured["isbn"] == "9781839761232"

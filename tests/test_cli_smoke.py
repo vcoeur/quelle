@@ -182,3 +182,103 @@ def test_search_explicit_author_skips_query_split(
     assert result.exit_code == 0
     assert captured["query"] == "etranger, camus"
     assert captured["author"] == "kafka"
+
+
+def test_fetch_with_type_book_threads_through_resolver(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`quelle fetch <title> --type book` passes type_hint='book' through to the resolver."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.models.publication import Publication
+
+    captured: dict[str, object] = {}
+
+    def fake_resolve(client, settings, query, **kwargs):
+        captured["query"] = query
+        captured["type_hint"] = kwargs.get("type_hint")
+        captured["author"] = kwargs.get("author")
+        return Publication(title="Cannibal Capitalism", kind="book")
+
+    monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
+    result = runner.invoke(
+        app, ["fetch", "cannibal capitalism", "--type", "book", "--no-cache", "--json"]
+    )
+    assert result.exit_code == 0
+    assert captured["query"] == "cannibal capitalism"
+    assert captured["type_hint"] == "book"
+    assert captured["author"] is None
+
+
+def test_fetch_comma_query_splits_to_author(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`quelle fetch "title, surname" --type book` splits and passes author through."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.models.publication import Publication
+
+    captured: dict[str, object] = {}
+
+    def fake_resolve(client, settings, query, **kwargs):
+        captured["query"] = query
+        captured["author"] = kwargs.get("author")
+        return Publication(title="x", kind="book")
+
+    monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
+    result = runner.invoke(
+        app,
+        ["fetch", "cannibal capitalism, fraser", "--type", "book", "--no-cache", "--json"],
+    )
+    assert result.exit_code == 0
+    assert captured["query"] == "cannibal capitalism"
+    assert captured["author"] == "fraser"
+
+
+def test_fetch_explicit_id_query_skips_comma_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A DOI-shaped query with a comma keeps its full form, no author split."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.models.publication import Publication
+
+    captured: dict[str, object] = {}
+
+    def fake_resolve(client, settings, query, **kwargs):
+        captured["query"] = query
+        captured["author"] = kwargs.get("author")
+        return Publication(title="x")
+
+    monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
+    result = runner.invoke(app, ["fetch", "10.1234/foo,bar", "--no-cache", "--json"])
+    assert result.exit_code == 0
+    assert captured["query"] == "10.1234/foo,bar"
+    assert captured["author"] is None
+
+
+def test_fetch_rejects_invalid_type(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+    result = runner.invoke(app, ["fetch", "x", "--type", "movies"])
+    assert result.exit_code == 1

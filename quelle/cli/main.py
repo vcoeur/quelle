@@ -147,7 +147,20 @@ def init() -> None:
 
 @app.command()
 def fetch(
-    query: str = typer.Argument(..., help="DOI, arXiv id, or free-text title."),
+    query: str = typer.Argument(..., help="DOI, arXiv id, ISBN, or free-text title."),
+    author: str = typer.Option(
+        None,
+        "--author",
+        help="Author hint for free-text title queries (used to disambiguate).",
+    ),
+    result_type: str = typer.Option(
+        "all",
+        "--type",
+        help=(
+            "Bias resolution toward book / article sources for free-text queries. "
+            "Ignored when the query is an explicit DOI / ISBN / arXiv id."
+        ),
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Bypass the local cache (always hit the network)."
@@ -162,16 +175,42 @@ def fetch(
     """Resolve a publication from open sources and print its metadata."""
     from dataclasses import replace
 
+    if result_type not in {"book", "article", "all"}:
+        _report(UserError(f"--type must be one of: book, article, all (got {result_type!r})"))
+        raise typer.Exit(1)
+
+    effective_query = query
+    effective_author = author
+    if effective_author is None and not _looks_like_explicit_id(query):
+        effective_query, parsed_author = _split_author_from_query(query)
+        if parsed_author is not None:
+            effective_author = parsed_author
+
+    type_hint = result_type if result_type != "all" else None
+
     settings = _load()
     mode = OutputMode.detect(json_output)
     try:
         with build_client(settings) as client:
             if no_cache:
-                publication = resolve_with_enrichment(client, settings, query)
+                publication = resolve_with_enrichment(
+                    client,
+                    settings,
+                    effective_query,
+                    type_hint=type_hint,
+                    author=effective_author,
+                )
                 cache_handle = None
             else:
                 cache_handle = Cache.open(settings.paths.cache_db)
-                publication = resolve_with_enrichment(client, settings, query, cache=cache_handle)
+                publication = resolve_with_enrichment(
+                    client,
+                    settings,
+                    effective_query,
+                    cache=cache_handle,
+                    type_hint=type_hint,
+                    author=effective_author,
+                )
             if download_pdf:
                 from quelle.services.pdf_resolver import resolve_and_download
 
@@ -259,6 +298,28 @@ def search(
         "hits": [_hit_to_dict(rank, hit) for rank, hit in enumerate(hits, start=1)],
     }
     render_search(payload, mode=mode)
+
+
+def _looks_like_explicit_id(query: str) -> bool:
+    """Cheap check: does the query look like a DOI, ISBN, or arXiv id?
+
+    Used to suppress the comma-split heuristic on `quelle fetch` for
+    explicit-id queries, since those occasionally contain commas
+    (DOIs especially) and have no need for an author hint.
+    """
+    import re
+
+    stripped = query.strip().lower()
+    if stripped.startswith(("doi:", "isbn:", "isbn ", "https://doi.org/", "http://doi.org/")):
+        return True
+    if re.match(r"^10\.\d{4,9}/\S+$", stripped):
+        return True
+    isbn_chars = "".join(ch for ch in stripped if not ch.isspace() and ch != "-")
+    if len(isbn_chars) in (10, 13) and isbn_chars.replace("x", "").isdigit():
+        return True
+    if re.match(r"^\d{4}\.\d{4,5}(v\d+)?$", stripped):
+        return True
+    return bool(re.match(r"^[a-z\-]+/\d{7}(v\d+)?$", stripped))
 
 
 def _split_author_from_query(query: str) -> tuple[str, str | None]:
