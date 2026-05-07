@@ -94,3 +94,91 @@ def test_search_rejects_invalid_type(
     monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
     result = runner.invoke(app, ["search", "x", "--type", "movies"])
     assert result.exit_code == 1
+
+
+def test_split_author_from_query_basic() -> None:
+    from quelle.cli.main import _split_author_from_query
+
+    assert _split_author_from_query("etranger, camus") == ("etranger", "camus")
+    assert _split_author_from_query("attention is all you need, vaswani") == (
+        "attention is all you need",
+        "vaswani",
+    )
+
+
+def test_split_author_from_query_no_comma() -> None:
+    from quelle.cli.main import _split_author_from_query
+
+    assert _split_author_from_query("attention is all you need") == (
+        "attention is all you need",
+        None,
+    )
+
+
+def test_split_author_from_query_rejects_year() -> None:
+    """A trailing token containing digits is not a name."""
+    from quelle.cli.main import _split_author_from_query
+
+    assert _split_author_from_query("foo, 2024") == ("foo, 2024", None)
+
+
+def test_split_author_from_query_rejects_too_many_tokens() -> None:
+    """Trailing piece with >3 tokens is unlikely to be a single name; keep as-is."""
+    from quelle.cli.main import _split_author_from_query
+
+    assert _split_author_from_query("foo, alpha beta gamma delta") == (
+        "foo, alpha beta gamma delta",
+        None,
+    )
+
+
+def test_search_passes_split_author_to_service(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`search "etranger, camus"` should call the service with author=camus."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+
+    captured: dict[str, object] = {}
+
+    def fake_search(client, settings, query, **kwargs):
+        captured["query"] = query
+        captured["author"] = kwargs.get("author")
+        return []
+
+    monkeypatch.setattr(cli_main.search_service, "search", fake_search)
+    result = runner.invoke(app, ["search", "etranger, camus", "--json"])
+    assert result.exit_code == 0
+    assert captured["query"] == "etranger"
+    assert captured["author"] == "camus"
+
+
+def test_search_explicit_author_skips_query_split(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit `--author` flag disables the comma heuristic."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+
+    captured: dict[str, object] = {}
+
+    def fake_search(client, settings, query, **kwargs):
+        captured["query"] = query
+        captured["author"] = kwargs.get("author")
+        return []
+
+    monkeypatch.setattr(cli_main.search_service, "search", fake_search)
+    result = runner.invoke(app, ["search", "etranger, camus", "--author", "kafka", "--json"])
+    assert result.exit_code == 0
+    assert captured["query"] == "etranger, camus"
+    assert captured["author"] == "kafka"

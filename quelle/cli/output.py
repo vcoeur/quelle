@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -113,7 +114,14 @@ def render_config(payload: dict[str, Any], *, mode: OutputMode) -> None:
 
 
 def render_search(payload: dict[str, Any], *, mode: OutputMode) -> None:
-    """Render a numbered list of search hits, or emit JSON."""
+    """Render a numbered list of search hits, or emit JSON.
+
+    Three lines per hit:
+      1. rank + title (bold)
+      2. authors · year · type   (dim)
+      3. id   ·   sources        (id in green when resolvable, yellow otherwise)
+    A blank line separates hits.
+    """
     if mode.json:
         emit_json(payload)
         return
@@ -121,30 +129,44 @@ def render_search(payload: dict[str, Any], *, mode: OutputMode) -> None:
     if not hits:
         _console.print("[dim]no matches[/dim]")
         return
-    for entry in hits:
+    for index, entry in enumerate(hits):
+        if index > 0:
+            _console.print()
         rank = entry.get("rank")
-        title = entry.get("title") or "(no title)"
+        title = escape(entry.get("title") or "(no title)")
+
         authors = entry.get("authors") or []
-        authors_line = ", ".join(a.get("name", "") for a in authors[:3])
+        author_names = [a.get("name", "") for a in authors[:3] if a.get("name")]
+        authors_line = ", ".join(escape(name) for name in author_names)
         if len(authors) > 3:
-            authors_line += " et al."
+            authors_line += f" (+{len(authors) - 3})"
+
         year = entry.get("year")
         hit_type = entry.get("type") or "unknown"
-        sources = entry.get("sources") or []
-        id_str = entry.get("id") or "[dim]—[/dim]"
+        id_str = entry.get("id")
         resolvable = entry.get("id_resolvable", True)
-        suffix = "" if resolvable else "[yellow]*[/yellow]"
+        sources = entry.get("sources") or []
 
-        head = f"[bold]{rank}.[/bold] {title}"
-        meta_bits = []
+        _console.print(f"[bold cyan]{rank:>2}.[/bold cyan]  [bold]{title}[/bold]")
+
+        byline_bits: list[str] = []
         if authors_line:
-            meta_bits.append(authors_line)
+            byline_bits.append(authors_line)
         if year:
-            meta_bits.append(str(year))
-        meta_bits.append(f"[dim]\\[{hit_type}][/dim]")
-        _console.print(f"{head} — {' · '.join(meta_bits)}")
-        sources_line = ", ".join(sources)
-        _console.print(f"   id: [cyan]{id_str}[/cyan]{suffix}   sources: [dim]{sources_line}[/dim]")
+            byline_bits.append(str(year))
+        byline_bits.append(hit_type)
+        _console.print(f"     [dim]{' · '.join(byline_bits)}[/dim]")
+
+        if id_str:
+            colour = "green" if resolvable else "yellow"
+            id_segment = f"[{colour}]{escape(id_str)}[/{colour}]"
+            if not resolvable:
+                id_segment += " [dim](not accepted by quelle fetch)[/dim]"
+        else:
+            id_segment = "[dim]no identifier[/dim]"
+        if sources:
+            id_segment += f"   [dim]· {', '.join(escape(s) for s in sources)}[/dim]"
+        _console.print(f"     {id_segment}")
 
 
 def render_cache_list(payload: dict[str, Any], *, mode: OutputMode) -> None:
