@@ -31,6 +31,33 @@ quelle fetch 1706.03762 --download-pdf
 
 Google Scholar URLs are **not supported**: Scholar has no public API and its ToS prohibits automated access. If you only have a Scholar link, copy the paper title and feed that to `quelle fetch` — OpenAlex and Crossref together cover almost every paper with a DOI.
 
+## `quelle search`
+
+Browse candidate matches across every wired open source. Use this when a free-text query is ambiguous and `quelle fetch` would commit to a single guess.
+
+```bash
+# Free-text title across all sources, top 10.
+quelle search "attention is all you need"
+
+# Narrow by type and author hint.
+quelle search "etranger" --author camus --type book
+
+# Restrict to specific sources, JSON output.
+quelle search "transformer" --limit 5 --source openalex --source arxiv --json
+```
+
+Each hit is a publication merged across the sources that returned it. Hits from each source are merged via Reciprocal Rank Fusion (k=60) and deduplicated by DOI / ISBN-13 / arXiv id. The `id:` line on each hit is `doi:…`, `isbn:…`, or `arxiv:…` when one of those identifiers is available — copy that value back into `quelle fetch <id>` to resolve the full record.
+
+Flags:
+
+- `--author TEXT` — author hint, threaded into native author fields where the source supports one (OpenAlex filter, Open Library `author=`, Google Books `inauthor:`, arXiv `au:`, BnF `bib.author`); otherwise folded into the query.
+- `--type book|article|all` — restricts the source set. `all` (default) queries all six wired sources.
+- `--limit INTEGER` — final merged-list size. Default 10.
+- `--source NAME` / `--no-source NAME` — repeatable allow/deny lists. Names: `openalex`, `semantic_scholar`, `arxiv`, `open_library`, `google_books`, `bnf`.
+- `--json` — emit JSON.
+
+If a single source fails (network error, rate limit), `quelle search` logs a warning and returns the merged hits from the remaining sources rather than failing the whole call.
+
 ## Cache commands
 
 The cache is a SQLite database keyed by DOI, arXiv id, OpenAlex id, and normalised title. A second query for the same paper is offline.

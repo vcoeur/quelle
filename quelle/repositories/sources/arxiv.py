@@ -21,10 +21,12 @@ from xml.etree import ElementTree as ET
 import httpx
 
 from quelle.models.publication import Author, Publication
+from quelle.models.search import SearchHit
 from quelle.repositories.errors import NetworkError, NotFoundError
 from quelle.settings import Settings
 
 QUERY_URL = "https://export.arxiv.org/api/query"
+SOURCE_NAME = "arxiv"
 
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -76,6 +78,76 @@ def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Pub
     if response.status_code >= 400:
         raise NetworkError(f"{response.status_code} from arXiv: {response.text[:200]}")
     return _parse_feed(response.text)
+
+
+def search(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    *,
+    author: str | None = None,
+    limit: int = 20,
+) -> list[SearchHit]:
+    """Return up to `limit` candidate hits for a free-text query.
+
+    `author`, when provided, is added with the `au:` qualifier; the
+    title query uses `ti:` so multi-word inputs aren't broken up.
+    """
+    del settings
+    parts = [f'ti:"{query}"']
+    if author:
+        parts.append(f'au:"{author}"')
+    search_query = " AND ".join(parts)
+    _rate_limit()
+    try:
+        response = client.get(
+            QUERY_URL,
+            params={"search_query": search_query, "max_results": str(limit)},
+        )
+    except httpx.RequestError as exc:
+        raise NetworkError(f"arXiv request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise NetworkError(f"{response.status_code} from arXiv: {response.text[:200]}")
+    return _parse_feed_list(response.text)
+
+
+def _parse_feed_list(body: str) -> list[SearchHit]:
+    """Parse an arXiv Atom feed and return all entries as SearchHits."""
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as exc:
+        raise NetworkError(f"invalid arXiv Atom feed: {exc}") from exc
+    return [
+        _to_search_hit(entry, rank)
+        for rank, entry in enumerate(root.findall("atom:entry", _ATOM_NS))
+    ]
+
+
+def _to_search_hit(entry: ET.Element, rank: int) -> SearchHit:
+    """Map an Atom `<entry>` element into a SearchHit."""
+    title = _normalise_whitespace(_text(entry.find("atom:title", _ATOM_NS)) or "")
+    published = _text(entry.find("atom:published", _ATOM_NS))
+    year = int(published.split("-", 1)[0]) if published else None
+
+    authors: list[Author] = []
+    for author in entry.findall("atom:author", _ATOM_NS):
+        name = _text(author.find("atom:name", _ATOM_NS))
+        if name:
+            authors.append(Author(name=name))
+
+    entry_id = _text(entry.find("atom:id", _ATOM_NS)) or ""
+    arxiv_id = _arxiv_id_from_abs_url(entry_id)
+
+    return SearchHit(
+        title=title,
+        authors=authors,
+        year=year,
+        type="article",
+        arxiv_id=arxiv_id,
+        source=SOURCE_NAME,
+        source_id=arxiv_id or entry_id,
+        raw_rank=rank,
+    )
 
 
 def _strip_version(arxiv_id: str) -> str:

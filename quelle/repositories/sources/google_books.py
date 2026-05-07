@@ -13,11 +13,13 @@ from typing import Any
 import httpx
 
 from quelle.models.publication import Author, Publication
+from quelle.models.search import SearchHit
 from quelle.repositories.errors import NotFoundError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
 VOLUMES_URL = "https://www.googleapis.com/books/v1/volumes"
+SOURCE_NAME = "google_books"
 
 
 def _auth_params(settings: Settings) -> dict[str, str]:
@@ -44,6 +46,49 @@ def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Pub
     if not items:
         raise NotFoundError(f"no Google Books match for title: {title!r}")
     return _to_publication(items[0])
+
+
+def search(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    *,
+    author: str | None = None,
+    limit: int = 20,
+) -> list[SearchHit]:
+    """Return up to `limit` candidate hits for a free-text query.
+
+    Uses Google Books' field qualifiers (`intitle:` for the query and
+    `inauthor:` when an author hint is provided) so the underlying
+    relevance ranker biases on each field rather than mashing them
+    into a single bag-of-words.
+    """
+    parts = [f"intitle:{query}"]
+    if author:
+        parts.append(f"inauthor:{author}")
+    params = {"q": "+".join(parts), "maxResults": str(limit), **_auth_params(settings)}
+    payload = get_json(client, VOLUMES_URL, params=params)
+    items = payload.get("items") or []
+    return [_to_search_hit(item, rank) for rank, item in enumerate(items)]
+
+
+def _to_search_hit(item: dict[str, Any], rank: int) -> SearchHit:
+    """Map a Google Books `volumes` item into a SearchHit."""
+    volume = item.get("volumeInfo") or {}
+    isbn_10, isbn_13 = _extract_isbns(volume.get("industryIdentifiers") or [])
+    authors = [Author(name=name) for name in volume.get("authors") or [] if name]
+
+    return SearchHit(
+        title=volume.get("title") or "",
+        authors=authors,
+        year=_publish_year(volume.get("publishedDate")),
+        type="book",
+        isbn_10=isbn_10,
+        isbn_13=isbn_13,
+        source=SOURCE_NAME,
+        source_id=item.get("id") or "",
+        raw_rank=rank,
+    )
 
 
 def _to_publication(item: dict[str, Any]) -> Publication:

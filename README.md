@@ -114,6 +114,11 @@ quelle fetch "ISBN: 0-14-018633-6"
 # Bypass the local cache and force network.
 quelle fetch 10.xxxx/yyyy --no-cache
 
+# Search across multiple open sources, then resolve the chosen hit.
+quelle search "attention is all you need"
+quelle search "etranger" --author camus --type book
+quelle search "transformer" --limit 5 --source openalex --source arxiv --json
+
 # Inspect the cache.
 quelle cache stats
 quelle cache list --limit 20

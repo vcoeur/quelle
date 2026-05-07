@@ -24,11 +24,13 @@ from typing import Any
 import httpx
 
 from quelle.models.publication import Author, Publication
+from quelle.models.search import SearchHit
 from quelle.repositories.errors import NetworkError, NotFoundError, PublicationsError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
 BASE_URL = "https://openlibrary.org"
+SOURCE_NAME = "open_library"
 
 
 def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
@@ -55,6 +57,45 @@ def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Pub
     if not docs:
         raise NotFoundError(f"no Open Library match for title: {title!r}")
     return _doc_to_publication(docs[0])
+
+
+def search(
+    client: httpx.Client,
+    settings: Settings,
+    query: str,
+    *,
+    author: str | None = None,
+    limit: int = 20,
+) -> list[SearchHit]:
+    """Return up to `limit` candidate book hits for a free-text title query."""
+    del settings
+    params: dict[str, str] = {"title": query, "limit": str(limit)}
+    if author:
+        params["author"] = author
+    payload = get_json(client, f"{BASE_URL}/search.json", params=params)
+    docs = payload.get("docs") or []
+    return [_to_search_hit(doc, rank) for rank, doc in enumerate(docs)]
+
+
+def _to_search_hit(doc: dict[str, Any], rank: int) -> SearchHit:
+    """Map a `search.json` doc into a SearchHit."""
+    isbn_list = doc.get("isbn") or []
+    isbn_10 = next((value for value in isbn_list if len(value) == 10), None)
+    isbn_13 = next((value for value in isbn_list if len(value) == 13), None)
+
+    authors = [Author(name=name) for name in doc.get("author_name") or [] if name]
+
+    return SearchHit(
+        title=doc.get("title") or "",
+        authors=authors,
+        year=doc.get("first_publish_year"),
+        type="book",
+        isbn_10=isbn_10,
+        isbn_13=isbn_13,
+        source=SOURCE_NAME,
+        source_id=doc.get("key") or "",
+        raw_rank=rank,
+    )
 
 
 def _build_publication(
