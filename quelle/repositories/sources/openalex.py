@@ -51,6 +51,31 @@ def fetch_by_doi(client: httpx.Client, settings: Settings, doi: str) -> Publicat
     return _to_publication(payload)
 
 
+def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
+    """Best-effort OpenAlex lookup for a book ISBN.
+
+    OpenAlex does not carry ISBN as a first-class identifier on Work
+    records — the lookup degrades to a free-text `search=<isbn>` over
+    the work index, restricted to book / book-chapter types. That
+    matches when the ISBN appears in title / abstract / source name,
+    but it is **prone to false positives**: a book chapter that
+    references another book by ISBN can rank first. Callers should
+    treat results with skepticism — the resolver places this source
+    last in the book fallback chain for that reason.
+    """
+    params = {
+        "search": isbn,
+        "filter": "type:book|book-chapter",
+        "per-page": "1",
+        **_auth_params(settings),
+    }
+    payload = get_json(client, WORKS_URL, params=params)
+    results = payload.get("results") or []
+    if not results:
+        raise NotFoundError(f"no OpenAlex book match for ISBN: {isbn}")
+    return _to_publication(results[0])
+
+
 def _to_publication(work: dict[str, Any]) -> Publication:
     """Map an OpenAlex work JSON into a `Publication`."""
     authorships = work.get("authorships") or []
@@ -96,6 +121,7 @@ def _to_publication(work: dict[str, Any]) -> Publication:
         doi=_strip_doi(work.get("doi")),
         arxiv_id=_extract_arxiv_id(work),
         openalex_id=work.get("id"),
+        kind=_normalise_kind(work.get("type")),
         abstract=_reconstruct_abstract(work.get("abstract_inverted_index")),
         citation_count=work.get("cited_by_count"),
         is_open_access=open_access.get("is_oa"),
@@ -107,6 +133,18 @@ def _to_publication(work: dict[str, Any]) -> Publication:
         page_range=_format_pages(biblio),
         resolved_from_chain=["openalex"],
     )
+
+
+def _normalise_kind(work_type: str | None) -> str | None:
+    """Map OpenAlex `type` strings onto our `kind` enum.
+
+    OpenAlex publishes a long type vocabulary; we collapse anything
+    that isn't an article/preprint/book/book-chapter to None and let
+    downstream code render it as untagged.
+    """
+    if work_type in {"article", "preprint", "book", "book-chapter"}:
+        return work_type
+    return None
 
 
 def _format_pages(biblio: dict[str, Any]) -> str | None:

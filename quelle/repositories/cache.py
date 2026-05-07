@@ -21,7 +21,7 @@ from pathlib import Path
 from quelle.models.publication import Author, Publication
 from quelle.repositories.errors import CacheError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS publications (
     doi          TEXT,
     openalex_id  TEXT,
     arxiv_id     TEXT,
+    isbn_10      TEXT,
+    isbn_13      TEXT,
     title_key    TEXT,
     payload_json TEXT NOT NULL,
     cached_at    TEXT NOT NULL
@@ -43,6 +45,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS publications_openalex ON publications(openalex
     WHERE openalex_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS publications_arxiv ON publications(arxiv_id)
     WHERE arxiv_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS publications_isbn_13 ON publications(isbn_13)
+    WHERE isbn_13 IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS publications_isbn_10 ON publications(isbn_10)
+    WHERE isbn_10 IS NOT NULL;
 CREATE INDEX IF NOT EXISTS publications_title ON publications(title_key);
 """
 
@@ -55,14 +61,19 @@ class Cache:
 
     @classmethod
     def open(cls, db_path: Path) -> Cache:
-        """Open the cache file, creating schema on first use."""
+        """Open the cache file, creating schema on first use.
+
+        On an existing v1 cache, runs an in-place ALTER TABLE migration
+        to add the ISBN columns + indexes before stamping schema v2.
+        """
         db_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             connection = sqlite3.connect(db_path)
             connection.row_factory = sqlite3.Row
+            _migrate_to_v2(connection)
             connection.executescript(_SCHEMA)
             connection.execute(
-                "INSERT OR IGNORE INTO meta(key, value) VALUES (?, ?)",
+                "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
                 ("schema_version", str(SCHEMA_VERSION)),
             )
             connection.commit()
@@ -97,6 +108,13 @@ class Cache:
             (arxiv_id,),
         )
 
+    def get_by_isbn(self, isbn: str) -> Publication | None:
+        """Look up a cached publication by either ISBN-10 or ISBN-13."""
+        return self._fetch_one(
+            "SELECT payload_json FROM publications WHERE isbn_13 = ? OR isbn_10 = ?",
+            (isbn, isbn),
+        )
+
     def get_by_title_exact(self, title: str) -> Publication | None:
         return self._fetch_one(
             "SELECT payload_json FROM publications WHERE title_key = ?",
@@ -110,12 +128,15 @@ class Cache:
             self._conn.execute(
                 """
                 INSERT INTO publications
-                    (citation_key, doi, openalex_id, arxiv_id, title_key, payload_json, cached_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                    (citation_key, doi, openalex_id, arxiv_id, isbn_10, isbn_13,
+                     title_key, payload_json, cached_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(citation_key) DO UPDATE SET
                     doi          = excluded.doi,
                     openalex_id  = excluded.openalex_id,
                     arxiv_id     = excluded.arxiv_id,
+                    isbn_10      = excluded.isbn_10,
+                    isbn_13      = excluded.isbn_13,
                     title_key    = excluded.title_key,
                     payload_json = excluded.payload_json,
                     cached_at    = excluded.cached_at
@@ -125,6 +146,8 @@ class Cache:
                     (publication.doi or "").lower() or None,
                     publication.openalex_id,
                     publication.arxiv_id,
+                    publication.isbn_10,
+                    publication.isbn_13,
                     _title_key(publication.title),
                     payload,
                     datetime.now(UTC).isoformat(),
@@ -181,6 +204,25 @@ class Cache:
         if row is None:
             return None
         return _publication_from_payload(row["payload_json"])
+
+
+def _migrate_to_v2(connection: sqlite3.Connection) -> None:
+    """Add `isbn_10` and `isbn_13` columns to a pre-v2 publications table.
+
+    No-op when the table doesn't exist yet (first-run case — `_SCHEMA`
+    will create it with the new columns directly) or when the columns
+    are already present (idempotent re-run).
+    """
+    cursor = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='publications'"
+    )
+    if cursor.fetchone() is None:
+        return
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(publications)")}
+    if "isbn_10" not in existing:
+        connection.execute("ALTER TABLE publications ADD COLUMN isbn_10 TEXT")
+    if "isbn_13" not in existing:
+        connection.execute("ALTER TABLE publications ADD COLUMN isbn_13 TEXT")
 
 
 def _publication_to_dict(publication: Publication) -> dict:

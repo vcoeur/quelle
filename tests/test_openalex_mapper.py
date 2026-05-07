@@ -91,3 +91,26 @@ def test_extract_arxiv_id_from_pdf_url() -> None:
 def test_extract_arxiv_id_returns_none_when_absent() -> None:
     work = {"locations": [{"landing_page_url": "https://example.com/paper"}]}
     assert _extract_arxiv_id(work) is None
+
+
+def test_to_publication_tags_book_kind() -> None:
+    work = {
+        "title": "Archives du Nord",
+        "type": "book",
+        "publication_year": 1977,
+        "primary_location": {"source": {"display_name": "Gallimard"}},
+    }
+    publication = _to_publication(work)
+    assert publication.kind == "book"
+
+
+def test_to_publication_tags_article_kind() -> None:
+    work = {"title": "Some paper", "type": "article"}
+    publication = _to_publication(work)
+    assert publication.kind == "article"
+
+
+def test_to_publication_drops_unknown_kind() -> None:
+    work = {"title": "An entry", "type": "dataset"}
+    publication = _to_publication(work)
+    assert publication.kind is None

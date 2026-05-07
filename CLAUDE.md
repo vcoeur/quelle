@@ -1,6 +1,6 @@
 # CLAUDE.md — quelle
 
-Local CLI that fetches academic publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and returns them as normalised JSON. Designed as a composable building block — the tool has no hardcoded opinion about where results end up; downstream consumers (skills, scripts, reference managers) decide that.
+Local CLI that fetches publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and returns them as normalised JSON. Handles both academic articles (DOI / arXiv id / title) and books (ISBN / title). Designed as a composable building block — the tool has no hardcoded opinion about where results end up; downstream consumers (skills, scripts, reference managers) decide that.
 
 The name is German for *source*: in academic citations, "Quelle:" prefixes a bibliographic reference, and fetching from open sources is what this tool does. The package distributes on PyPI under `quelle`; the command-line binary is also `quelle`.
 
@@ -61,13 +61,20 @@ The detection is a heuristic (`_looks_like_installed_location` in `paths.py`) �
 
 ## Sources
 
-Implemented in priority order (see `quelle/repositories/sources/`). Each module exports:
+Implemented in priority order (see `quelle/repositories/sources/`). Each module exports a subset of:
 
 - `search_by_title(client, settings, title) -> Publication`
-- `fetch_by_doi(client, settings, doi) -> Publication` (where applicable)
+- `fetch_by_doi(client, settings, doi) -> Publication` (article sources)
+- `fetch_by_arxiv_id(client, settings, arxiv_id) -> Publication` (arXiv only)
+- `fetch_by_isbn(client, settings, isbn) -> Publication` (book sources: open_library, google_books, openalex, bnf)
 - `_to_publication(raw) -> Publication` — private mapper, unit-tested without network
 
-Sources never decide the resolution order themselves — the `services/resolver.py` orchestrator does.
+Sources never decide the resolution order themselves — the `services/resolver.py` orchestrator does. The resolver inspects the query shape and routes:
+
+- DOI → OpenAlex (then Crossref + Semantic Scholar enrichment)
+- arXiv id → arXiv (then OpenAlex by title for a published version)
+- ISBN-10 / ISBN-13 → Open Library → Google Books → OpenAlex → BnF (best-effort fallback chain, then book-aware enrichment)
+- free text → OpenAlex `search` (article path; book search by title is not currently auto-detected — pass an ISBN for books)
 
 ## Rate-limit discipline
 
@@ -75,6 +82,8 @@ Sources never decide the resolution order themselves — the `services/resolver.
 - **arXiv**: max 1 request / 3 seconds for metadata queries. Static PDF fetches from `arxiv.org/pdf/...` are unbounded.
 - **Unpaywall**: 100 ms delay between requests, 100k / day quota.
 - **OpenAlex**: $1/day quota when authenticated, lower unauth. Don't batch fetch without caching.
+- **Open Library** / **BnF**: no documented hard cap; both run on shared / volunteer-funded infrastructure — keep volume reasonable, never run a tight loop.
+- **Google Books**: 1 000 requests / day per IP unauth. `GOOGLE_BOOKS_API_KEY` raises the cap.
 
 ## Commands
 

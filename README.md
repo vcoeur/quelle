@@ -1,12 +1,14 @@
 # quelle
 
-`quelle` is a local CLI that fetches academic publication metadata and PDFs from open academic sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) and returns them as normalised JSON. Designed as a composable building block — feed the output into any note-taking system, reference manager, or research workflow.
+`quelle` is a local CLI that fetches publication metadata and PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and returns them as normalised JSON. Handles both academic articles and books. Designed as a composable building block — feed the output into any note-taking system, reference manager, or research workflow.
 
 The name is German for *source* — in academic German, "Quelle:" is the word that introduces a bibliographic reference, and fetching from open sources is exactly what the tool does.
 
 ## What it does
 
-Given a publication identifier or a free-text title, `quelle fetch` returns a normalised JSON blob with title, authors, year, venue, DOI, abstract, citation count and (optionally) a downloaded local PDF. It walks a fallback chain of free open sources:
+Given a publication identifier (DOI, arXiv id, ISBN-10/13) or a free-text title, `quelle fetch` returns a normalised JSON blob with title, authors, year, venue or publisher, DOI or ISBN, abstract or description, citation count and (optionally) a downloaded local PDF. It walks a fallback chain of free open sources, picking the right ones based on the shape of the query:
+
+**For academic articles** (DOI, arXiv id, paper title):
 
 | Source | Role | Rate limit |
 |---|---|---|
@@ -15,6 +17,15 @@ Given a publication identifier or a free-text title, `quelle fetch` returns a no
 | [Semantic Scholar](https://api.semanticscholar.org/) | Citation graph + metadata fallback | 5000 / 5 min unauth |
 | [arXiv](https://info.arxiv.org/help/api/) | Preprint metadata + direct PDFs | 1 req / 3s (enforced) |
 | [Unpaywall](https://unpaywall.org/products/api) | DOI → OA PDF lookup | 100k / day |
+
+**For books** (ISBN-10, ISBN-13, book title):
+
+| Source | Role | Rate limit |
+|---|---|---|
+| [Open Library](https://openlibrary.org/dev/docs/api/books) | Primary book metadata, broad ISBN coverage | no published cap; be polite |
+| [Google Books](https://developers.google.com/books/) | Metadata fallback, public-domain PDFs | 1k / day per IP unauth |
+| OpenAlex (books) | Cross-reference for academic monographs | as above |
+| [BnF SRU](https://api.bnf.fr/api-sru-de-bnf-catalogue-general) | Strong on French-language books | no published cap |
 
 Google Scholar URLs are **not supported**: Scholar has no public API and its Terms of Service prohibit automated access. If you only have a Scholar link, open the page, copy the paper title, and feed that to `quelle fetch` as a free-text query — OpenAlex and Crossref cover almost every paper with a DOI.
 
@@ -94,6 +105,12 @@ quelle fetch 1706.03762 --download-pdf
 # Resolve by free-text title.
 quelle fetch "The Perceptron: A Probabilistic Model" --json
 
+# Resolve a book by ISBN-13 (Open Library primary, Google Books / OpenAlex / BnF fallback).
+quelle fetch 9782070407132
+
+# Resolve a book by ISBN-10, hyphens and `ISBN:` prefix tolerated.
+quelle fetch "ISBN: 0-14-018633-6"
+
 # Bypass the local cache and force network.
 quelle fetch 10.xxxx/yyyy --no-cache
 
@@ -101,6 +118,7 @@ quelle fetch 10.xxxx/yyyy --no-cache
 quelle cache stats
 quelle cache list --limit 20
 quelle cache show 10.1109/83.902291
+quelle cache show 9782070407132
 quelle cache clear --yes
 ```
 
@@ -136,7 +154,7 @@ Layer rules: imports only go downward. Models import nothing from this project. 
 
 ## Status
 
-v0.1 — all five open-API sources wired up with a merge-logic enrichment chain, a SQLite cache keyed by DOI / arXiv id / OpenAlex id / title (second query for the same paper is offline), and a PDF download chain with OpenAlex → arXiv → Unpaywall fallback plus content-type and size validation.
+All eight open-API sources wired up with a merge-logic enrichment chain. Article identifiers (DOI / arXiv id / title) walk OpenAlex → Crossref → Semantic Scholar; book identifiers (ISBN-10 / ISBN-13) walk Open Library → Google Books → OpenAlex → BnF. SQLite cache keyed by DOI / arXiv id / OpenAlex id / ISBN-10 / ISBN-13 / title — the second query for the same record is offline. PDF download chain (OpenAlex → arXiv → Unpaywall) only fires for articles and OA / public-domain books; in-copyright books are intentionally skipped even with `--download-pdf` set.
 
 ## Usage and terms
 
@@ -146,7 +164,8 @@ This tool is intended for **personal and academic research use**. It queries fre
 
 - **Bulk scraping** / batch ingestion of many records. Most upstreams publish free database snapshots; use those instead of hammering the live API.
 - **Rehosting downloaded PDFs** on a public server. The `--download-pdf` flag writes to a local cache on your machine — that is fine. Re-serving arXiv PDFs, publisher PDFs, or full text from your own infrastructure is not (see arXiv and Semantic Scholar rows below).
-- **Commercial repackaging** of the JSON output as a paid product. Individual commercial use of the metadata is generally allowed by the underlying licences, but Semantic Scholar in particular requires attribution and some S2 records are `CC BY-NC`.
+- **Downloading in-copyright books.** `--download-pdf` will only follow `pdf_url` when one is advertised, and the only book sources that publish a `pdf_url` are public-domain editions (e.g. Google Books `FULL_PUBLIC_DOMAIN`). The tool does **not** attempt library-genesis lookups, publisher scraping, or any in-copyright PDF resolution for books. Do not work around this — most books are still in copyright and downloading them without permission is infringement in nearly every jurisdiction.
+- **Commercial repackaging** of the JSON output as a paid product. Individual commercial use of the metadata is generally allowed by the underlying licences, but Semantic Scholar in particular requires attribution and some S2 records are `CC BY-NC`. Book descriptions returned by Google Books may be publisher-supplied and remain copyrighted independently of the JSON envelope around them — treat the `abstract` field for books as quotable but not redistributable.
 
 **Per-source summary**:
 
@@ -157,6 +176,9 @@ This tool is intended for **personal and academic research use**. It queries fre
 | [arXiv API](https://info.arxiv.org/help/api/tou.html) | Metadata CC0. PDFs retain their authors' / arXiv's licence. | **1 request / 3 seconds** (the tool enforces this globally via a module-level lock) | Do not claim arXiv endorses your project. | **You may not store and re-serve arXiv e-prints (PDFs, source files, other content) from your own servers unless you have the copyright holder's permission.** Downloading for local personal reading is explicitly allowed. |
 | [Semantic Scholar](https://www.semanticscholar.org/product/api/license) | S2 data may be `CC BY-NC` or `ODC-BY` depending on the record. The API itself is provided *"AS IS, WITH ALL FAULTS, AND AS AVAILABLE"* with no warranty. | Public endpoints need no auth; higher throughput requires a free key from Ai2. | **Required** — *"Licensee will include an attribution to 'Semantic Scholar'"*, and publications must cite *The Semantic Scholar Open Data Platform*. | You may not *"repackage, sell, rent, lease, lend, distribute, or sublicense the API"*. This tool is a personal client, not a proxy. |
 | [Unpaywall](https://unpaywall.org/products/api) | CC0 data | 100k requests / day | not required | The email parameter is **mandatory** — Unpaywall uses it to contact you if something goes wrong. Don't fake it. For bulk workloads, download the free data snapshot instead of hammering the API. |
+| [Open Library](https://openlibrary.org/developers/api) | CC0 metadata; cover images CC-BY-SA via Internet Archive. | No published hard cap; honour the platform's general guidance to be considerate (Open Library runs on volunteer-funded Internet Archive infrastructure). | not required | Open Library publishes monthly bulk dumps — use those for any non-trivial volume rather than crawling the live API. |
+| [Google Books](https://developers.google.com/books/terms) | Subject to Google's API Terms of Service; metadata may be cached but not redistributed in bulk. Public-domain PDF downloads only. | 1 000 requests / day per IP unauth. Set `GOOGLE_BOOKS_API_KEY` for higher quotas. | not required | The Volumes API permits caching for a limited duration but disallows building a competing service from its data. |
+| [BnF SRU catalogue](https://api.bnf.fr/api-sru-de-bnf-catalogue-general) | Open public-sector data licence (Etalab 2.0 / similar). | No published cap; the SRU endpoint is shared infrastructure — keep volume reasonable. | requested where reused | Strong on French-language books and serials; coverage of non-French material is patchy. |
 
 **Google Scholar is not supported.** Google Scholar has no official API, and Google's Terms of Service prohibit automated access. Passing a Scholar URL to `quelle fetch` returns a `UserError` asking you to copy the paper title manually and retry — OpenAlex and Crossref together cover almost every paper with a DOI, so the workaround is usually one extra copy-paste.
 

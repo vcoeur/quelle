@@ -1,14 +1,22 @@
 """Normalised publication model.
 
-All external sources (OpenAlex, Crossref, Semantic Scholar, arXiv)
-map their raw responses into `Publication` before returning.
-Downstream code (CLI output, cache, JSON export) only ever sees
-this shape.
+All external sources (OpenAlex, Crossref, Semantic Scholar, arXiv,
+Open Library, Google Books, BnF) map their raw responses into
+`Publication` before returning. Downstream code (CLI output, cache,
+JSON export) only ever sees this shape.
+
+The same dataclass holds both articles and books — `kind` tags the
+record and book-specific fields (`isbn_10`, `isbn_13`, `edition`,
+`page_count`) sit alongside article-specific ones. None-valued fields
+are omitted from rendering rather than gating logic on `kind`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from typing import Literal
+
+Kind = Literal["article", "preprint", "book", "book-chapter"]
 
 
 @dataclass(frozen=True)
@@ -44,6 +52,12 @@ class Publication:
     arxiv_id: str | None = None
     openalex_id: str | None = None
     semantic_scholar_id: str | None = None
+    isbn_10: str | None = None
+    isbn_13: str | None = None
+    edition: str | None = None
+    page_count: int | None = None
+    kind: Kind | None = None
+    subjects: list[str] = field(default_factory=list)
     abstract: str | None = None
     citation_count: int | None = None
     is_open_access: bool | None = None
@@ -100,6 +114,11 @@ class Publication:
             "arxiv_id",
             "openalex_id",
             "semantic_scholar_id",
+            "isbn_10",
+            "isbn_13",
+            "edition",
+            "page_count",
+            "kind",
             "abstract",
             "citation_count",
             "is_open_access",
@@ -120,6 +139,8 @@ class Publication:
             updates["authors"] = list(other.authors)
         if not self.topics and other.topics:
             updates["topics"] = list(other.topics)
+        if not self.subjects and other.subjects:
+            updates["subjects"] = list(other.subjects)
 
         merged_chain = list(self.resolved_from_chain)
         for tag in other.resolved_from_chain:

@@ -46,6 +46,7 @@ def tmp_settings(tmp_path: Path) -> Settings:
     return Settings(
         openalex_api_key="",
         semantic_scholar_api_key="",
+        google_books_api_key="",
         unpaywall_email="",
         contact_email="tests@example.com",
         http_timeout=5.0,

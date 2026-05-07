@@ -1,7 +1,7 @@
 ---
 name: quelle
-description: Fetch academic publication metadata (title, authors, year, DOI, abstract, citation count) and optionally the open-access PDF, given a DOI, arXiv id, or free-text title. Walks a fallback chain of free open APIs — OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall — and returns a normalised JSON blob. Has no knowledge of any particular note-taking system. Use when the user says "look up this paper", "get metadata for DOI 10.xxx", "find the arXiv entry for X", or pastes a paper identifier with intent to retrieve information about it. Google Scholar URLs are not supported — ask the user to copy the paper title from Scholar and pass it as free text instead.
-argument-hint: "<DOI | arXiv id | title>"
+description: Fetch publication metadata (title, authors, year, DOI/ISBN, abstract, citation count) and optionally the open-access PDF, given a DOI, arXiv id, ISBN-10/13, or free-text title. Handles both academic articles and books — walks a fallback chain of free open APIs (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and returns a normalised JSON blob. Has no knowledge of any particular note-taking system. Use when the user says "look up this paper", "get metadata for DOI 10.xxx", "find the arXiv entry for X", "find this book by ISBN", or pastes any publication identifier with intent to retrieve information about it. Google Scholar URLs are not supported — ask the user to copy the title and pass it as free text instead.
+argument-hint: "<DOI | arXiv id | ISBN | title>"
 allowed-tools: Read, Write, Edit, Bash(quelle fetch:*), Bash(quelle cache:*), Bash(quelle config:*), Bash(quelle init:*), Bash(quelle version:*), Bash(python3:*), Bash(jq:*), Bash(command -v quelle:*)
 ---
 
@@ -15,7 +15,7 @@ Thin wrapper around the [`quelle`](https://github.com/vcoeur/quelle) CLI. Given 
 
 ## Responsible API usage — read this first
 
-`quelle` queries free, public APIs (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall) on your behalf. Each has its own Terms of Service, licence, and rate limits. **You are responsible for complying with every upstream's terms.** The MIT licence on `quelle` covers the *code* of the tool — **not** the data you fetch through it.
+`quelle` queries free, public APIs (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) on your behalf. Each has its own Terms of Service, licence, and rate limits. **You are responsible for complying with every upstream's terms.** The MIT licence on `quelle` covers the *code* of the tool — **not** the data you fetch through it.
 
 This skill is intended for **one-off, personal, academic research lookups** — a few papers at a time. It is **not** suitable for:
 
@@ -30,6 +30,9 @@ Before using `quelle` at any non-trivial scale, read each upstream's terms:
 - [arXiv API](https://info.arxiv.org/help/api/tou.html) — **1 request / 3 seconds** (the tool enforces this globally). Metadata is CC0, PDFs keep their authors' licence.
 - [Semantic Scholar](https://www.semanticscholar.org/product/api/license) — attribution **required**. The API is "AS IS" with no warranty and may not be repackaged or resold.
 - [Unpaywall](https://unpaywall.org/products/api) — 100k req/day, email parameter mandatory. For bulk workloads download the free snapshot instead.
+- [Open Library](https://openlibrary.org/dev/docs/api/books) — CC0 metadata. Be considerate; no hard rate cap published, but Internet Archive infrastructure is volunteer-funded.
+- [Google Books API](https://developers.google.com/books/terms) — usage governed by Google's API Terms of Service. 1 000 requests/day per IP without a key; set `GOOGLE_BOOKS_API_KEY` for higher quotas.
+- [BnF SRU](https://api.bnf.fr/api-sru-de-bnf-catalogue-general) — public catalogue, no key, attribution appreciated. Strong on French-language books.
 
 **Google Scholar is not supported.** Google Scholar has no official API, and Google's Terms of Service prohibit automated access. Passing a Scholar URL to `quelle fetch` returns a `UserError` asking you to copy the paper title manually and retry.
 
@@ -82,10 +85,18 @@ Then show the key fields to the user:
 python3 - <<'PY'
 import json
 d = json.load(open("/tmp/paper.json"))
+is_book = d.get("kind") in {"book", "book-chapter"}
 print(f"Title:     {d['title']}")
 print(f"Year:      {d.get('year')}")
-print(f"DOI:       {d.get('doi')}")
-print(f"arXiv:     {d.get('arxiv_id')}")
+if is_book:
+    print(f"Publisher: {d.get('publisher')}")
+    print(f"ISBN:      {d.get('isbn_13') or d.get('isbn_10')}")
+    print(f"Edition:   {d.get('edition')}")
+    print(f"Pages:     {d.get('page_count')}")
+else:
+    print(f"DOI:       {d.get('doi')}")
+    print(f"arXiv:     {d.get('arxiv_id')}")
+    print(f"Venue:     {d.get('venue')}")
 print(f"Authors:   {', '.join(a['name'] for a in (d.get('authors') or []))}")
 print(f"Citekey:   {d.get('citation_key')}")
 print(f"Chain:     {', '.join(d.get('resolved_from_chain') or [])}")
@@ -93,7 +104,7 @@ print(f"PDF URL:   {d.get('pdf_url') or '(none)'}")
 print(f"Local PDF: {d.get('local_pdf_path') or '(not downloaded)'}")
 if d.get("abstract"):
     print()
-    print("Abstract:")
+    print("Description:" if is_book else "Abstract:")
     print(d["abstract"])
 PY
 ```
@@ -128,7 +139,7 @@ rm -f /tmp/paper.json
 
 ## Adapting this skill to your workflow
 
-This skill stops at "print the metadata". If you want to do something with the result — save to Obsidian, append to a BibTeX file, create a Zotero entry, email yourself the PDF — fork this `SKILL.md` and add your own step after `quelle fetch` returns. The JSON shape is stable: `title`, `authors` (list of `{name, orcid?, affiliation?}`), `year`, `doi`, `arxiv_id`, `openalex_id`, `abstract`, `citation_count`, `is_open_access`, `pdf_url`, `local_pdf_path`, `venue`, `publisher`, `journal_volume`, `journal_issue`, `page_range`, `topics`, `source_url`, `citation_key`, `resolved_from_chain`.
+This skill stops at "print the metadata". If you want to do something with the result — save to Obsidian, append to a BibTeX file, create a Zotero entry, email yourself the PDF — fork this `SKILL.md` and add your own step after `quelle fetch` returns. The JSON shape is stable: `title`, `authors` (list of `{name, orcid?, affiliation?}`), `year`, `kind` (`article`/`preprint`/`book`/`book-chapter`/`null`), `doi`, `arxiv_id`, `openalex_id`, `isbn_10`, `isbn_13`, `edition`, `page_count`, `subjects`, `abstract`, `citation_count`, `is_open_access`, `pdf_url`, `local_pdf_path`, `venue`, `publisher`, `journal_volume`, `journal_issue`, `page_range`, `topics`, `source_url`, `citation_key`, `resolved_from_chain`.
 
 When designing that downstream step, keep the responsible-use principles from the top of this file in mind — in particular, do not let your workflow turn `quelle` into a batch pipeline that calls the upstream APIs hundreds of times in a row.
 

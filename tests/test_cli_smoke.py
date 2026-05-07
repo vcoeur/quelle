@@ -19,9 +19,11 @@ def test_version_command_json() -> None:
 
 
 def test_version_command_plain() -> None:
+    from quelle import __version__
+
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert "quelle 0.1.0" in result.output
+    assert f"quelle {__version__}" in result.output
 
 
 def test_config_show_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

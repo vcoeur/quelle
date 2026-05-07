@@ -18,18 +18,29 @@ this module focused on source orchestration).
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 import httpx
 
+from quelle._isbn import isbn10_to_13, isbn13_to_10
 from quelle.models.publication import Publication
 from quelle.repositories.cache import Cache
 from quelle.repositories.errors import NetworkError, NotFoundError, PublicationsError, UserError
-from quelle.repositories.sources import arxiv, crossref, openalex, semantic_scholar
+from quelle.repositories.sources import (
+    arxiv,
+    bnf,
+    crossref,
+    google_books,
+    open_library,
+    openalex,
+    semantic_scholar,
+)
 from quelle.settings import Settings
 
 _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _ARXIV_RE = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+/\d{7}(v\d+)?)$", re.IGNORECASE)
 _SCHOLAR_HOST_RE = re.compile(r"scholar\.google\.\w+", re.IGNORECASE)
+_ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
 
 
 def resolve(client: httpx.Client, settings: Settings, query: str) -> Publication:
@@ -46,6 +57,10 @@ def resolve(client: httpx.Client, settings: Settings, query: str) -> Publication
             'publications fetch "<paper title>"'
         )
 
+    isbn = _extract_isbn(stripped)
+    if isbn:
+        return _resolve_book_primary(client, settings, isbn)
+
     doi_candidate = _extract_doi(stripped)
     if doi_candidate:
         return openalex.fetch_by_doi(client, settings, doi_candidate)
@@ -54,6 +69,29 @@ def resolve(client: httpx.Client, settings: Settings, query: str) -> Publication
         return arxiv.fetch_by_arxiv_id(client, settings, stripped)
 
     return openalex.search_by_title(client, settings, stripped)
+
+
+def _resolve_book_primary(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
+    """Try the book sources in priority order and return the first hit.
+
+    Order: Open Library (broad ISBN coverage) → Google Books (broad
+    fallback) → BnF (strong on French) → OpenAlex (last resort, prone
+    to false positives because OpenAlex doesn't index books by ISBN
+    natively). See `openalex.fetch_by_isbn` for the caveat.
+    """
+    last_error: PublicationsError | None = None
+    for source_call in (
+        lambda: open_library.fetch_by_isbn(client, settings, isbn),
+        lambda: google_books.fetch_by_isbn(client, settings, isbn),
+        lambda: bnf.fetch_by_isbn(client, settings, isbn),
+        lambda: openalex.fetch_by_isbn(client, settings, isbn),
+    ):
+        try:
+            return source_call()
+        except (NotFoundError, NetworkError) as exc:
+            last_error = exc
+            continue
+    raise last_error or NotFoundError(f"no book source matched ISBN: {isbn}")
 
 
 def resolve_with_enrichment(
@@ -85,7 +123,44 @@ def resolve_with_enrichment(
     primary = resolve(client, settings, query)
     current = primary
 
-    chain = primary.resolved_from_chain
+    if current.kind in {"book", "book-chapter"}:
+        current = _enrich_book(client, settings, current)
+        current = _backfill_isbn_pair(current)
+    else:
+        current = _enrich_article(client, settings, current)
+
+    if cache is not None:
+        cache.upsert(current)
+    return current
+
+
+def _backfill_isbn_pair(record: Publication) -> Publication:
+    """Compute the missing ISBN form so cache lookups by either succeed.
+
+    When a source returns only one of (ISBN-10, ISBN-13) we derive the
+    other arithmetically. Both algorithms are deterministic and live
+    in `_isbn10_to_13` / `_isbn13_to_10`. ISBN-13 outside the 978
+    prefix has no ISBN-10 equivalent and is left untouched.
+    """
+    updates: dict[str, str] = {}
+    if record.isbn_10 and not record.isbn_13:
+        derived = isbn10_to_13(record.isbn_10)
+        if derived:
+            updates["isbn_13"] = derived
+    if record.isbn_13 and not record.isbn_10:
+        derived = isbn13_to_10(record.isbn_13)
+        if derived:
+            updates["isbn_10"] = derived
+    return replace(record, **updates) if updates else record
+
+
+def _enrich_article(
+    client: httpx.Client,
+    settings: Settings,
+    current: Publication,
+) -> Publication:
+    """Article enrichment chain: arXiv→OpenAlex by title, then Crossref, then S2."""
+    chain = current.resolved_from_chain
     started_on_arxiv = bool(chain) and chain[0] == "arxiv"
     if started_on_arxiv and not current.doi:
         current = _try_enrich(
@@ -104,15 +179,54 @@ def resolve_with_enrichment(
             current,
             lambda: semantic_scholar.fetch_by_doi(client, settings, current.doi),
         )
-
-    if cache is not None:
-        cache.upsert(current)
     return current
+
+
+def _enrich_book(
+    client: httpx.Client,
+    settings: Settings,
+    current: Publication,
+) -> Publication:
+    """Fill missing book fields from the other book sources, in priority order.
+
+    Stops as soon as the record is "complete enough" — has a publisher,
+    a year, and either a description (abstract) or subjects. Each
+    source call is best-effort and swallowed on failure.
+    """
+    isbn = current.isbn_13 or current.isbn_10
+    if not isbn:
+        return current
+
+    head = current.resolved_from_chain[0] if current.resolved_from_chain else None
+    fallback_calls: list[tuple[str, callable]] = [
+        ("open_library", lambda: open_library.fetch_by_isbn(client, settings, isbn)),
+        ("google_books", lambda: google_books.fetch_by_isbn(client, settings, isbn)),
+        ("bnf", lambda: bnf.fetch_by_isbn(client, settings, isbn)),
+        ("openalex", lambda: openalex.fetch_by_isbn(client, settings, isbn)),
+    ]
+
+    for source_name, call in fallback_calls:
+        if source_name == head:
+            continue
+        if _book_record_complete(current):
+            break
+        current = _try_enrich(current, call)
+    return current
+
+
+def _book_record_complete(record: Publication) -> bool:
+    """Heuristic for when to stop enriching a book record."""
+    return bool(record.publisher and record.year and (record.abstract or record.subjects))
 
 
 def _lookup_in_cache(cache: Cache, query: str) -> Publication | None:
     """Try every cache lookup route for the given query string."""
     stripped = query.strip()
+    isbn = _extract_isbn(stripped)
+    if isbn:
+        hit = cache.get_by_isbn(isbn)
+        if hit is not None:
+            return hit
     doi = _extract_doi(stripped)
     if doi:
         hit = cache.get_by_doi(doi)
@@ -148,4 +262,23 @@ def _extract_doi(query: str) -> str | None:
     lowered = lowered.removeprefix("doi:")
     if _DOI_RE.match(lowered):
         return lowered
+    return None
+
+
+def _extract_isbn(query: str) -> str | None:
+    """Pull a bare ISBN out of `ISBN: ...`, hyphenated, or plain digit strings.
+
+    Accepts ISBN-10 (9 digits + check, where check may be `X`) and
+    ISBN-13 (978/979 + 10 digits). Hyphens and spaces are stripped
+    before validating; the returned form is digits-only (with `X`
+    preserved on ISBN-10).
+    """
+    raw = query.strip().lower()
+    raw = raw.removeprefix("isbn:")
+    raw = raw.removeprefix("isbn ")
+    digits = "".join(ch for ch in raw if ch.isdigit() or ch in "xX").upper()
+    if not digits:
+        return None
+    if _ISBN_DIGITS_RE.match(digits):
+        return digits
     return None

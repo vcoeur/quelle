@@ -129,7 +129,7 @@ def version(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
 ) -> None:
     """Print the installed version."""
-    payload = {"name": "quelle", "version": "0.1.0"}
+    payload = {"name": "quelle", "version": __version__}
     if json_output:
         emit_json(payload)
     else:

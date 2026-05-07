@@ -34,6 +34,34 @@ def get_json(
     Raises `RateLimitError` on 429, `NetworkError` on any other failure
     (request exception, non-2xx, or invalid JSON body).
     """
+    response = _get(client, url, params=params)
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise NetworkError(f"invalid JSON from {url}: {exc}") from exc
+
+
+def get_text(
+    client: httpx.Client,
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+) -> str:
+    """GET a URL and return the raw response body.
+
+    Used for sources that return XML (arXiv Atom, BnF SRU). The same
+    error-mapping rules as `get_json` apply.
+    """
+    return _get(client, url, params=params).text
+
+
+def _get(
+    client: httpx.Client,
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+) -> httpx.Response:
+    """Issue the GET and convert HTTP-level failures into our error types."""
     try:
         response = client.get(url, params=params)
     except httpx.RequestError as exc:
@@ -42,7 +70,4 @@ def get_json(
         raise RateLimitError(f"rate limited by {url}: {response.text[:200]}")
     if response.status_code >= 400:
         raise NetworkError(f"{response.status_code} from {url}: {response.text[:200]}")
-    try:
-        return response.json()
-    except ValueError as exc:
-        raise NetworkError(f"invalid JSON from {url}: {exc}") from exc
+    return response

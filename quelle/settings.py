@@ -26,6 +26,7 @@ class Settings:
 
     openalex_api_key: str
     semantic_scholar_api_key: str
+    google_books_api_key: str
     unpaywall_email: str
     contact_email: str
     http_timeout: float
@@ -58,6 +59,7 @@ def load_settings() -> Settings:
     return Settings(
         openalex_api_key=env.str("OPENALEX_API_KEY", ""),
         semantic_scholar_api_key=env.str("SEMANTIC_SCHOLAR_API_KEY", ""),
+        google_books_api_key=env.str("GOOGLE_BOOKS_API_KEY", ""),
         unpaywall_email=env.str("UNPAYWALL_EMAIL", contact_email),
         contact_email=contact_email,
         http_timeout=env.float("QUELLE_HTTP_TIMEOUT", 30.0),

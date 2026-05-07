@@ -49,6 +49,8 @@ def render_publication(payload: dict[str, Any], *, mode: OutputMode) -> None:
     pdf_url = payload.get("pdf_url")
     citation_key = payload.get("citation_key")
     authors = payload.get("authors") or []
+    kind = payload.get("kind")
+    is_book = kind in {"book", "book-chapter"}
 
     authors_line = ", ".join(author.get("name", "") for author in authors[:5])
     if len(authors) > 5:
@@ -60,24 +62,35 @@ def render_publication(payload: dict[str, Any], *, mode: OutputMode) -> None:
     meta_bits: list[str] = []
     if year:
         meta_bits.append(str(year))
-    if venue:
-        meta_bits.append(venue)
-    if doi:
-        meta_bits.append(f"doi:{doi}")
+    if is_book:
+        publisher = payload.get("publisher")
+        if publisher:
+            meta_bits.append(publisher)
+        edition = payload.get("edition")
+        if edition:
+            meta_bits.append(edition)
+        isbn = payload.get("isbn_13") or payload.get("isbn_10")
+        if isbn:
+            meta_bits.append(f"isbn:{isbn}")
+    else:
+        if venue:
+            meta_bits.append(venue)
+        if doi:
+            meta_bits.append(f"doi:{doi}")
     if citation_key:
         meta_bits.append(f"cite:{citation_key}")
     if meta_bits:
         header_lines.append("[dim]" + " · ".join(meta_bits) + "[/dim]")
     if pdf_url:
         header_lines.append(f"[green]PDF[/green]: {pdf_url}")
-    else:
+    elif not is_book:
         header_lines.append("[yellow]no PDF found[/yellow]")
 
     _console.print(Panel("\n".join(header_lines), expand=False))
 
     abstract = payload.get("abstract")
     if abstract:
-        _console.print("[bold]Abstract[/bold]")
+        _console.print("[bold]Abstract[/bold]" if not is_book else "[bold]Description[/bold]")
         _console.print(abstract)
 
 
