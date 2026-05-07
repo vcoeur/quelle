@@ -87,10 +87,16 @@ def search(
     query: str,
     *,
     author: str | None = None,
+    kind: str | None = None,
     limit: int = 20,
 ) -> list[SearchHit]:
-    """Return up to `limit` candidate book hits for a free-text title query."""
+    """Return up to `limit` candidate book hits for a free-text title query.
+
+    `kind` is accepted for signature uniformity but ignored — the BnF
+    catalogue is overwhelmingly books.
+    """
     del settings
+    del kind
     title_clause = f'bib.title adj "{query.replace(chr(34), "")}"'
     if author:
         cql = f'{title_clause} and bib.author adj "{author.replace(chr(34), "")}"'

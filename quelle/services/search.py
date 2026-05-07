@@ -76,10 +76,13 @@ def search(
     selected = _select_sources(type, sources, no_sources)
     per_source_limit = max(limit * 2, 20)
 
+    kind_hint = type if type in {"book", "article"} else None
     raw: list[list[SearchHit]] = []
     with ThreadPoolExecutor(max_workers=max(len(selected), 1)) as pool:
         futures = {
-            pool.submit(_safe_call, fn, client, settings, query, author, per_source_limit): name
+            pool.submit(
+                _safe_call, fn, client, settings, query, author, kind_hint, per_source_limit
+            ): name
             for name, fn in selected.items()
         }
         for future in as_completed(futures):
@@ -93,6 +96,8 @@ def search(
 
     merged = _merge(raw)
     merged = _dedup_by_similarity(merged)
+    if kind_hint is not None:
+        merged = [hit for hit in merged if hit.type in {kind_hint, "unknown"}]
     merged.sort(key=_sort_key)
     return merged[:limit]
 
@@ -130,11 +135,17 @@ def _safe_call(
     settings: Settings,
     query: str,
     author: str | None,
+    kind: str | None,
     limit: int,
 ) -> list[SearchHit]:
-    """Invoke a source's `search()` and swallow expected errors."""
+    """Invoke a source's `search()` and swallow expected errors.
+
+    Every adapter accepts `kind` via its keyword-only signature; sources
+    that don't expose a native type filter ignore it. Currently only
+    OpenAlex (multi-type) uses it.
+    """
     try:
-        return fn(client, settings, query, author=author, limit=limit)
+        return fn(client, settings, query, author=author, kind=kind, limit=limit)
     except PublicationsError as exc:
         logger.info("source failed, degrading: %s", exc)
         return []

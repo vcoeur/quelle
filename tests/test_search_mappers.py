@@ -156,6 +156,57 @@ def test_bnf_search_hit_extracts_creator_and_isbn() -> None:
     assert hit.source_id.startswith("http://catalogue.bnf.fr/ark:")
 
 
+def test_openalex_search_kind_book_adds_type_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`kind="book"` must add `type:book|book-chapter` to the OpenAlex filter param."""
+    captured: dict[str, object] = {}
+
+    def fake_get_json(client, url, *, params=None):
+        captured["params"] = params or {}
+        return {"results": []}
+
+    monkeypatch.setattr(openalex, "get_json", fake_get_json)
+    from quelle.settings import Settings
+
+    settings = Settings(
+        openalex_api_key="",
+        semantic_scholar_api_key="",
+        google_books_api_key="",
+        unpaywall_email="",
+        contact_email="",
+        http_timeout=5.0,
+        user_agent="test",
+        max_pdf_mb=100,
+        paths=None,  # type: ignore[arg-type]
+    )
+    openalex.search(None, settings, "x", kind="book")  # type: ignore[arg-type]
+    assert "type:book|book-chapter" in captured["params"].get("filter", "")
+
+
+def test_openalex_search_kind_article_adds_type_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_get_json(client, url, *, params=None):
+        captured["params"] = params or {}
+        return {"results": []}
+
+    monkeypatch.setattr(openalex, "get_json", fake_get_json)
+    from quelle.settings import Settings
+
+    settings = Settings(
+        openalex_api_key="",
+        semantic_scholar_api_key="",
+        google_books_api_key="",
+        unpaywall_email="",
+        contact_email="",
+        http_timeout=5.0,
+        user_agent="test",
+        max_pdf_mb=100,
+        paths=None,  # type: ignore[arg-type]
+    )
+    openalex.search(None, settings, "x", kind="article")  # type: ignore[arg-type]
+    assert "type:article|preprint" in captured["params"].get("filter", "")
+
+
 def test_arxiv_parse_feed_list_handles_empty_feed() -> None:
     body = '<feed xmlns="http://www.w3.org/2005/Atom"></feed>'
     assert arxiv._parse_feed_list(body) == []
