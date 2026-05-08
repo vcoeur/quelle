@@ -84,15 +84,16 @@ def test_search_renders_json_with_mocked_service(
     assert '"id_resolvable": true' in result.output
 
 
-def test_search_rejects_invalid_type(
+def test_search_rejects_both_book_and_article(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """`--book` and `--article` are mutually exclusive — both set is a user error."""
     monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
-    result = runner.invoke(app, ["search", "x", "--type", "movies"])
+    result = runner.invoke(app, ["search", "x", "--book", "--article"])
     assert result.exit_code == 1
 
 
@@ -158,11 +159,11 @@ def test_search_passes_split_author_to_service(
     assert captured["author"] == "camus"
 
 
-def test_search_explicit_author_skips_query_split(
+def test_search_no_comma_query_passes_through_unchanged(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An explicit `--author` flag disables the comma heuristic."""
+    """A query without a comma must reach the service intact, with author=None."""
     monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
@@ -175,20 +176,22 @@ def test_search_explicit_author_skips_query_split(
     def fake_search(client, settings, query, **kwargs):
         captured["query"] = query
         captured["author"] = kwargs.get("author")
+        captured["type"] = kwargs.get("type")
         return []
 
     monkeypatch.setattr(cli_main.search_service, "search", fake_search)
-    result = runner.invoke(app, ["--json", "search", "etranger, camus", "--author", "kafka"])
+    result = runner.invoke(app, ["--json", "search", "attention is all you need", "--book"])
     assert result.exit_code == 0
-    assert captured["query"] == "etranger, camus"
-    assert captured["author"] == "kafka"
+    assert captured["query"] == "attention is all you need"
+    assert captured["author"] is None
+    assert captured["type"] == "book"
 
 
-def test_fetch_with_type_book_threads_through_resolver(
+def test_fetch_book_flag_threads_through_resolver(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`quelle fetch <title> --type book` passes type_hint='book' through to the resolver."""
+    """`quelle fetch <title> --book` passes type_hint='book' through to the resolver."""
     monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
@@ -206,9 +209,7 @@ def test_fetch_with_type_book_threads_through_resolver(
         return Publication(title="Cannibal Capitalism", kind="book")
 
     monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
-    result = runner.invoke(
-        app, ["--json", "fetch", "cannibal capitalism", "--type", "book", "--no-cache"]
-    )
+    result = runner.invoke(app, ["--json", "fetch", "cannibal capitalism", "--book", "--no-cache"])
     assert result.exit_code == 0
     assert captured["query"] == "cannibal capitalism"
     assert captured["type_hint"] == "book"
@@ -219,7 +220,7 @@ def test_fetch_comma_query_splits_to_author(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`quelle fetch "title, surname" --type book` splits and passes author through."""
+    """`quelle fetch "title, surname" --book` splits and passes author through."""
     monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
@@ -238,7 +239,7 @@ def test_fetch_comma_query_splits_to_author(
     monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
     result = runner.invoke(
         app,
-        ["--json", "fetch", "cannibal capitalism, fraser", "--type", "book", "--no-cache"],
+        ["--json", "fetch", "cannibal capitalism, fraser", "--book", "--no-cache"],
     )
     assert result.exit_code == 0
     assert captured["query"] == "cannibal capitalism"
@@ -272,13 +273,14 @@ def test_fetch_explicit_id_query_skips_comma_split(
     assert captured["author"] is None
 
 
-def test_fetch_rejects_invalid_type(
+def test_fetch_rejects_both_book_and_article(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """`--book` and `--article` are mutually exclusive on fetch as well."""
     monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
-    result = runner.invoke(app, ["fetch", "x", "--type", "movies"])
+    result = runner.invoke(app, ["fetch", "x", "--book", "--article"])
     assert result.exit_code == 1

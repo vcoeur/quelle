@@ -277,7 +277,7 @@ def test_fuzzy_merge_skips_when_no_authors(monkeypatch: pytest.MonkeyPatch) -> N
 def test_type_book_drops_article_hits_from_multi_type_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """OpenAlex covers both kinds — when --type book, article hits must be filtered out."""
+    """OpenAlex covers both kinds — when --book is set, article hits must be filtered out."""
     monkeypatch.setattr(
         search_service,
         "SOURCES",

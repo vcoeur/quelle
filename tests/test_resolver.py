@@ -144,7 +144,7 @@ def test_resolve_with_type_hint_delegates_to_search(
     tmp_settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Free-text + --type book should pick the top book hit and recurse via ISBN."""
+    """Free-text + type_hint=book should pick the top book hit and recurse via ISBN."""
     from quelle.models.publication import Author
     from quelle.models.search import MergedHit
     from quelle.repositories.sources import open_library
@@ -234,7 +234,7 @@ def test_resolve_explicit_id_ignores_type_hint(
     tmp_settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A query that's clearly an ISBN must resolve via the book chain regardless of --type."""
+    """A query that's clearly an ISBN must resolve via the book chain regardless of type_hint."""
     from quelle.repositories.sources import open_library
     from quelle.services import search as search_service
 

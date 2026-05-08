@@ -97,22 +97,32 @@ def _load() -> Settings:
     return load_settings()
 
 
+def _resolve_type_hint(book: bool, article: bool) -> str | None:
+    """Translate the mutually-exclusive `--book` / `--article` flags into a hint.
+
+    Both absent → `None` (query every source). Both present is a user error;
+    fail fast before touching settings or the network.
+    """
+    if book and article:
+        report_error(UserError("--book and --article are mutually exclusive"))
+        raise typer.Exit(1)
+    if book:
+        return "book"
+    if article:
+        return "article"
+    return None
+
+
 @app.command()
 def fetch(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="DOI, arXiv id, ISBN, or free-text title."),
-    author: str = typer.Option(
-        None,
-        "--author",
-        help="Author hint for free-text title queries (used to disambiguate).",
+    query: str = typer.Argument(
+        ...,
+        help='DOI, arXiv id, ISBN, or "Title[, Author]".',
     ),
-    result_type: str = typer.Option(
-        "all",
-        "--type",
-        help=(
-            "Bias resolution toward book / article sources for free-text queries. "
-            "Ignored when the query is an explicit DOI / ISBN / arXiv id."
-        ),
+    book: bool = typer.Option(False, "--book", help="Bias toward book sources (free-text only)."),
+    article: bool = typer.Option(
+        False, "--article", help="Bias toward article sources (free-text only)."
     ),
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Bypass the local cache (always hit the network)."
@@ -125,18 +135,12 @@ def fetch(
     ),
 ) -> None:
     """Resolve a publication from open sources and print its metadata."""
-    if result_type not in {"book", "article", "all"}:
-        report_error(UserError(f"--type must be one of: book, article, all (got {result_type!r})"))
-        raise typer.Exit(1)
+    type_hint = _resolve_type_hint(book, article)
 
     effective_query = query
-    effective_author = author
-    if effective_author is None and not looks_like_explicit_id(query):
-        effective_query, parsed_author = split_author_from_query(query)
-        if parsed_author is not None:
-            effective_author = parsed_author
-
-    type_hint = result_type if result_type != "all" else None
+    effective_author: str | None = None
+    if not looks_like_explicit_id(query):
+        effective_query, effective_author = split_author_from_query(query)
 
     settings = _load()
     cache_handle: Cache | None = None
@@ -175,18 +179,10 @@ def search(
     ctx: typer.Context,
     query: str = typer.Argument(
         ...,
-        help="Free-text title query (or any text the sources accept).",
+        help='Free-text title, or "Title, Author".',
     ),
-    author: str = typer.Option(
-        None,
-        "--author",
-        help="Author hint, used as a native filter where supported.",
-    ),
-    result_type: str = typer.Option(
-        "all",
-        "--type",
-        help="Restrict to book / article sources, or query both. One of: book, article, all.",
-    ),
+    book: bool = typer.Option(False, "--book", help="Restrict to book sources."),
+    article: bool = typer.Option(False, "--article", help="Restrict to article sources."),
     limit: int = typer.Option(3, "--limit", help="Number of merged hits to return."),
     source: list[str] = typer.Option(
         None, "--source", help="Repeatable. Restrict to named sources."
@@ -198,16 +194,10 @@ def search(
     deduplicated by DOI / ISBN / arXiv id. Each line ends with an
     `id:` value that can be passed to `quelle fetch`.
     """
-    if result_type not in {"book", "article", "all"}:
-        report_error(UserError(f"--type must be one of: book, article, all (got {result_type!r})"))
-        raise typer.Exit(1)
+    type_hint = _resolve_type_hint(book, article)
+    result_type = type_hint or "all"
 
-    effective_query = query
-    effective_author = author
-    if effective_author is None:
-        effective_query, parsed_author = split_author_from_query(query)
-        if parsed_author is not None:
-            effective_author = parsed_author
+    effective_query, effective_author = split_author_from_query(query)
 
     settings = _load()
     try:
