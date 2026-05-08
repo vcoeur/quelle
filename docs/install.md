@@ -16,11 +16,10 @@ Both install `quelle` into its own isolated venv and put it on your `$PATH`.
 
 ## First run
 
-Bootstrap the config, data, and cache dirs and seed a commented `.env`:
+The first invocation of any subcommand creates the config, data, and cache directories. To seed a commented `.env` and open it in your editor:
 
 ```bash
-quelle init
-quelle config edit                 # opens .env in $EDITOR
+quelle config edit                 # creates .env on first run, then opens it in $EDITOR
 ```
 
 The only variable worth setting by default is `QUELLE_CONTACT_EMAIL` — it goes into the `User-Agent` header and enrolls you in the Crossref and OpenAlex polite pools. Don't fake it: Unpaywall requires a real contact, and OpenAlex (as of January 2026) is transitioning to key-based authentication where the `OPENALEX_API_KEY` variable is used instead.
@@ -30,14 +29,14 @@ First fetch:
 ```bash
 quelle fetch 10.1109/83.902291
 quelle fetch 1706.03762 --download-pdf
-quelle fetch "The Perceptron" --json
+quelle --json fetch "The Perceptron"
 ```
 
 Verify the configuration at any time:
 
 ```bash
 quelle --help
-quelle config show --json
+quelle --json config
 ```
 
 ## Cross-OS paths
@@ -58,12 +57,11 @@ export QUELLE_DATA_DIR=/srv/quelle/data
 export QUELLE_CACHE_DIR=/var/cache/quelle
 ```
 
-Inspect the resolved paths:
+Inspect the resolved paths and effective config:
 
 ```bash
-quelle config path                 # plain output, one path per line
-quelle config path --json          # JSON, scriptable
-quelle config show                 # all values including API keys (redacted)
+quelle config                      # all values including resolved paths and redacted API key
+quelle --json config               # same payload as JSON, scriptable
 ```
 
 ## API keys and the polite pool
@@ -86,7 +84,7 @@ cd quelle
 make dev-install                   # uv sync --all-groups
 cp .env.example .env               # optional — sets contact email for the polite pool
 uv run quelle --help               # run the CLI straight from the repo
-uv run quelle config show --json
+uv run quelle --json config
 make test                          # pytest + pytest-httpx
 make lint                          # ruff check + format --check
 make format                        # ruff --fix + format

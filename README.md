@@ -42,11 +42,10 @@ pipx install quelle
 # or: uv tool install quelle
 ```
 
-Both install `quelle` into its own isolated venv and put it on your `$PATH`. Run the one-time bootstrap to create the config, data, and cache directories and seed a default `.env`:
+Both install `quelle` into its own isolated venv and put it on your `$PATH`. The first invocation of any command creates the config, data, and cache directories. To seed a default `.env` and open it in your editor:
 
 ```bash
-quelle init
-quelle config edit        # opens the .env in your $EDITOR
+quelle config edit        # creates the .env on first run, then opens it in $EDITOR
 ```
 
 ### Development from a source checkout
@@ -81,12 +80,11 @@ export QUELLE_DATA_DIR=/srv/quelle/data
 export QUELLE_CACHE_DIR=/var/cache/quelle
 ```
 
-Inspect the resolved paths at any time:
+Inspect the resolved paths and effective config at any time:
 
 ```bash
-quelle config path        # plain output, one path per line
-quelle config path --json # JSON, scriptable
-quelle config show        # all values including API keys (redacted)
+quelle config             # all values including resolved paths and redacted API key
+quelle --json config      # same payload as JSON, scriptable
 ```
 
 The only variable worth setting by default is `QUELLE_CONTACT_EMAIL` — it goes into the `User-Agent` header and enrolls you in the Crossref / OpenAlex polite pool. See [`.env.example`](.env.example) for the full list.
@@ -102,8 +100,8 @@ quelle fetch 10.1109/83.902291
 # Resolve by arXiv id, with PDF download into the data dir.
 quelle fetch 1706.03762 --download-pdf
 
-# Resolve by free-text title.
-quelle fetch "The Perceptron: A Probabilistic Model" --json
+# Resolve by free-text title (place --json before the subcommand).
+quelle --json fetch "The Perceptron: A Probabilistic Model"
 
 # Resolve a book by ISBN-13 (Open Library primary, Google Books / OpenAlex / BnF fallback).
 quelle fetch 9782070407132
@@ -117,10 +115,9 @@ quelle fetch 10.xxxx/yyyy --no-cache
 # Search across multiple open sources, then resolve the chosen hit.
 quelle search "attention is all you need"
 quelle search "etranger, camus" --type book          # comma splits title from author hint
-quelle search "transformer" --limit 5 --source openalex --source arxiv --json
+quelle --json search "transformer" --limit 5 --source openalex --source arxiv
 
-# Inspect the cache.
-quelle cache stats
+# Inspect the cache (`list` includes a header with the total / last upsert / schema).
 quelle cache list --limit 20
 quelle cache show 10.1109/83.902291
 quelle cache show 9782070407132
@@ -146,8 +143,9 @@ quelle/
     resolver.py         <- Source orchestration + enrichment chain + cache lookup
     pdf_resolver.py     <- Lazy PDF fallback chain
   cli/
-    main.py             <- Typer app (fetch, cache, version, init)
-    config.py           <- `config show` / `path` / `edit` + bootstrap
+    main.py             <- Typer app (fetch, search, cache, root --version + --json flags)
+    config.py           <- bare `config` (callback) + `config edit` (seeds + opens .env)
+    _helpers.py         <- heuristics, error reporting, dataclass→dict flatteners
     output.py           <- JSON vs rich TTY rendering
   paths.py              <- platformdirs resolution (config / data / cache)
   migrate.py            <- One-shot migration from the legacy config/cache layout

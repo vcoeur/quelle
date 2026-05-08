@@ -202,7 +202,7 @@ def resolve_with_enrichment(
        Semantic Scholar.
     """
     if cache is not None:
-        hit = _lookup_in_cache(cache, query, type_hint=type_hint, author=author)
+        hit = lookup_in_cache(cache, query, type_hint=type_hint, author=author)
         if hit is not None:
             return hit
 
@@ -305,7 +305,7 @@ def _book_record_complete(record: Publication) -> bool:
     return bool(record.publisher and record.year and (record.abstract or record.subjects))
 
 
-def _lookup_in_cache(
+def lookup_in_cache(
     cache: Cache,
     query: str,
     *,

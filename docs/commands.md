@@ -1,26 +1,33 @@
 ---
 title: Commands · quelle
-description: Full CLI reference for quelle — fetch, cache, config, init.
+description: Full CLI reference for quelle — fetch, search, cache, config.
 ---
 
 # Commands
 
-Every command accepts `--json` for machine-readable output. On a TTY without `--json`, output is rendered with rich tables and highlighted snippets. Claude skills and shell pipelines should always pass `--json`.
+The CLI surface is intentionally small: four subcommands (`fetch`, `search`, `cache`, `config`) plus a top-level `--version` flag. Every command takes its output mode from a single root flag, `--json`, that must appear **before** the subcommand:
+
+```bash
+quelle --json fetch 10.1109/83.902291    # JSON
+quelle fetch 10.1109/83.902291           # rich TTY rendering
+```
+
+Claude skills and shell pipelines should always pass `--json`. The first invocation of any command creates the config / data / cache directories — there is no separate `init` step.
 
 ## `quelle fetch`
 
-Resolve a publication by DOI, arXiv id, or free-text title. Walks the source fallback chain (OpenAlex → Crossref enrichment → Semantic Scholar → arXiv → Unpaywall) and returns a normalised JSON `Publication`.
+Resolve a publication by DOI, arXiv id, ISBN-10/13, or free-text title. Walks the source fallback chain (OpenAlex → Crossref enrichment → Semantic Scholar → arXiv → Unpaywall for articles; Open Library → Google Books → OpenAlex → BnF for books) and returns a normalised JSON `Publication`.
 
 ```bash
 # DOI — OpenAlex primary, Crossref enrichment.
 quelle fetch 10.1109/83.902291
-quelle fetch 10.1109/83.902291 --json
+quelle --json fetch 10.1109/83.902291
 
 # arXiv id — preprint metadata + direct PDF.
 quelle fetch 1706.03762
 
 # Free-text title — OpenAlex title search, Crossref fallback.
-quelle fetch "The Perceptron: A Probabilistic Model" --json
+quelle --json fetch "The Perceptron: A Probabilistic Model"
 
 # Bias resolution toward books for an ambiguous title (delegates to `quelle search`).
 quelle fetch "Cannibal Capitalism" --type book
@@ -57,7 +64,7 @@ quelle search "etranger, camus" --type book
 quelle search "etranger" --author camus --type book
 
 # Restrict to specific sources and widen the result list.
-quelle search "transformer" --limit 10 --source openalex --source arxiv --json
+quelle --json search "transformer" --limit 10 --source openalex --source arxiv
 ```
 
 Each hit is a publication merged across the sources that returned it. Hits are merged in two passes: first by exact identifier (DOI / ISBN-13 / arXiv id), then by similarity (normalised title + first-author surname, with diacritics folded). Cross-source ranking uses Reciprocal Rank Fusion (k=60). The `id:` line on each hit is `doi:…`, `isbn:…`, or `arxiv:…` when one of those identifiers is available — copy that value back into `quelle fetch <id>` to resolve the full record.
@@ -67,8 +74,7 @@ Flags:
 - `--author TEXT` — author hint, threaded into native author fields where the source supports one (OpenAlex filter, Open Library `author=`, Google Books `inauthor:`, arXiv `au:`, BnF `bib.author`); otherwise folded into the query. Setting this flag disables the comma heuristic on the positional query.
 - `--type book|article|all` — restricts the source set. `all` (default) queries all six wired sources.
 - `--limit INTEGER` — final merged-list size. **Default 3.**
-- `--source NAME` / `--no-source NAME` — repeatable allow/deny lists. Names: `openalex`, `semantic_scholar`, `arxiv`, `open_library`, `google_books`, `bnf`.
-- `--json` — emit JSON. The text-mode output is three lines per hit (rank + title, byline, id + sources) with a blank line between entries.
+- `--source NAME` — repeatable allowlist. Names: `openalex`, `semantic_scholar`, `arxiv`, `open_library`, `google_books`, `bnf`. There is no denylist flag — pass the explicit allowlist instead.
 
 **Comma-split heuristic.** When `--author` is not given and the query contains a comma, the trailing piece is treated as an author hint if it is 1-3 tokens with no digits (so `"foo, smith"` splits, `"foo, 2024"` does not, `"foo, alpha beta gamma delta"` does not). The split is conservative on purpose — titles with internal commas survive as long as they do not end with a name-shaped fragment.
 
@@ -76,61 +82,51 @@ If a single source fails (network error, rate limit), `quelle search` logs a war
 
 ## Cache commands
 
-The cache is a SQLite database keyed by DOI, arXiv id, OpenAlex id, and normalised title. A second query for the same paper is offline.
-
-### `quelle cache stats`
-
-Per-source counts, hit/miss ratio, total size.
-
-```bash
-quelle cache stats
-quelle cache stats --json
-```
+The cache is a SQLite database keyed by DOI, arXiv id, OpenAlex id, ISBN-10/13, and normalised title. A second query for the same paper is offline.
 
 ### `quelle cache list`
 
-Enumerate cached entries, newest first.
+Header line (total + last upsert + schema version) followed by the most-recent entries.
 
 ```bash
 quelle cache list --limit 20
-quelle cache list --json
+quelle --json cache list
 ```
 
 ### `quelle cache show`
 
-Full cached `Publication` blob for a key.
+Full cached `Publication` blob for a DOI, arXiv id, ISBN, or exact title. Never hits the network.
 
 ```bash
 quelle cache show 10.1109/83.902291
-quelle cache show 1706.03762 --json
+quelle --json cache show 1706.03762
 ```
 
 ### `quelle cache clear`
 
-Drop the cache. Prompts unless `--yes`.
+Drop the cache. Requires `--yes` — there is no interactive prompt.
 
 ```bash
 quelle cache clear --yes
 ```
 
-## Config and init
-
-### `quelle init`
-
-Bootstraps the config, data, and cache dirs and seeds a commented `.env`. Idempotent — safe to re-run.
-
-```bash
-quelle init
-```
+## Config commands
 
 ### `quelle config`
 
+Bare invocation prints every effective configuration value: resolved paths, the redacted OpenAlex key, the contact / Unpaywall emails, and the User-Agent.
+
 ```bash
-quelle config show                 # all values, API keys redacted
-quelle config show --json
-quelle config path                 # resolved config / data / cache paths
-quelle config path --json
-quelle config edit                 # open .env in $EDITOR
+quelle config
+quelle --json config
+```
+
+### `quelle config edit`
+
+Open the `.env` file in `$VISUAL` / `$EDITOR` (or the OS default — `notepad` / `open` / `xdg-open`). The first time it runs, it seeds the file from the bundled template and prints a one-line "Created" hint so you know you are editing a fresh file rather than your previous edits.
+
+```bash
+quelle config edit
 ```
 
 ### `quelle --version`

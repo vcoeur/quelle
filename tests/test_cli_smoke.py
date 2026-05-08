@@ -12,30 +12,30 @@ from quelle.cli.main import app
 runner = CliRunner()
 
 
-def test_version_command_json() -> None:
-    result = runner.invoke(app, ["version", "--json"])
-    assert result.exit_code == 0
-    assert '"quelle"' in result.output
-
-
-def test_version_command_plain() -> None:
+def test_version_flag_prints_name_and_version() -> None:
     from quelle import __version__
 
-    result = runner.invoke(app, ["version"])
+    result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
     assert f"quelle {__version__}" in result.output
 
 
-def test_config_show_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bare_quelle_shows_help() -> None:
+    result = runner.invoke(app, [])
+    assert result.exit_code != 0 or "Usage" in result.output
+
+
+def test_config_root_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`quelle --json config` (bare) shows the full config payload."""
     monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
     monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
-    result = runner.invoke(app, ["config", "show", "--json"])
+    result = runner.invoke(app, ["--json", "config"])
     assert result.exit_code == 0
     assert "cache_dir" in result.output
     assert "alice@example.com" in result.output
-    # ensure_dirs should have created data/pdfs and cache dirs.
+    # ensure_dirs runs from load_settings -> data/pdfs and cache dirs exist.
     assert (tmp_path / "data" / "pdfs").is_dir()
     assert (tmp_path / "cache").is_dir()
 
@@ -77,7 +77,7 @@ def test_search_renders_json_with_mocked_service(
     )
     monkeypatch.setattr(cli_main.search_service, "search", lambda *args, **kwargs: [fake])
 
-    result = runner.invoke(app, ["search", "attention", "--json"])
+    result = runner.invoke(app, ["--json", "search", "attention"])
     assert result.exit_code == 0
     assert "Attention Is All You Need" in result.output
     assert '"id": "doi:10.48550/arxiv.1706.03762"' in result.output
@@ -97,19 +97,19 @@ def test_search_rejects_invalid_type(
 
 
 def test_split_author_from_query_basic() -> None:
-    from quelle.cli.main import _split_author_from_query
+    from quelle.cli._helpers import split_author_from_query
 
-    assert _split_author_from_query("etranger, camus") == ("etranger", "camus")
-    assert _split_author_from_query("attention is all you need, vaswani") == (
+    assert split_author_from_query("etranger, camus") == ("etranger", "camus")
+    assert split_author_from_query("attention is all you need, vaswani") == (
         "attention is all you need",
         "vaswani",
     )
 
 
 def test_split_author_from_query_no_comma() -> None:
-    from quelle.cli.main import _split_author_from_query
+    from quelle.cli._helpers import split_author_from_query
 
-    assert _split_author_from_query("attention is all you need") == (
+    assert split_author_from_query("attention is all you need") == (
         "attention is all you need",
         None,
     )
@@ -117,16 +117,16 @@ def test_split_author_from_query_no_comma() -> None:
 
 def test_split_author_from_query_rejects_year() -> None:
     """A trailing token containing digits is not a name."""
-    from quelle.cli.main import _split_author_from_query
+    from quelle.cli._helpers import split_author_from_query
 
-    assert _split_author_from_query("foo, 2024") == ("foo, 2024", None)
+    assert split_author_from_query("foo, 2024") == ("foo, 2024", None)
 
 
 def test_split_author_from_query_rejects_too_many_tokens() -> None:
     """Trailing piece with >3 tokens is unlikely to be a single name; keep as-is."""
-    from quelle.cli.main import _split_author_from_query
+    from quelle.cli._helpers import split_author_from_query
 
-    assert _split_author_from_query("foo, alpha beta gamma delta") == (
+    assert split_author_from_query("foo, alpha beta gamma delta") == (
         "foo, alpha beta gamma delta",
         None,
     )
@@ -152,7 +152,7 @@ def test_search_passes_split_author_to_service(
         return []
 
     monkeypatch.setattr(cli_main.search_service, "search", fake_search)
-    result = runner.invoke(app, ["search", "etranger, camus", "--json"])
+    result = runner.invoke(app, ["--json", "search", "etranger, camus"])
     assert result.exit_code == 0
     assert captured["query"] == "etranger"
     assert captured["author"] == "camus"
@@ -178,7 +178,7 @@ def test_search_explicit_author_skips_query_split(
         return []
 
     monkeypatch.setattr(cli_main.search_service, "search", fake_search)
-    result = runner.invoke(app, ["search", "etranger, camus", "--author", "kafka", "--json"])
+    result = runner.invoke(app, ["--json", "search", "etranger, camus", "--author", "kafka"])
     assert result.exit_code == 0
     assert captured["query"] == "etranger, camus"
     assert captured["author"] == "kafka"
@@ -207,7 +207,7 @@ def test_fetch_with_type_book_threads_through_resolver(
 
     monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
     result = runner.invoke(
-        app, ["fetch", "cannibal capitalism", "--type", "book", "--no-cache", "--json"]
+        app, ["--json", "fetch", "cannibal capitalism", "--type", "book", "--no-cache"]
     )
     assert result.exit_code == 0
     assert captured["query"] == "cannibal capitalism"
@@ -238,7 +238,7 @@ def test_fetch_comma_query_splits_to_author(
     monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
     result = runner.invoke(
         app,
-        ["fetch", "cannibal capitalism, fraser", "--type", "book", "--no-cache", "--json"],
+        ["--json", "fetch", "cannibal capitalism, fraser", "--type", "book", "--no-cache"],
     )
     assert result.exit_code == 0
     assert captured["query"] == "cannibal capitalism"
@@ -266,7 +266,7 @@ def test_fetch_explicit_id_query_skips_comma_split(
         return Publication(title="x")
 
     monkeypatch.setattr(cli_main, "resolve_with_enrichment", fake_resolve)
-    result = runner.invoke(app, ["fetch", "10.1234/foo,bar", "--no-cache", "--json"])
+    result = runner.invoke(app, ["--json", "fetch", "10.1234/foo,bar", "--no-cache"])
     assert result.exit_code == 0
     assert captured["query"] == "10.1234/foo,bar"
     assert captured["author"] is None
