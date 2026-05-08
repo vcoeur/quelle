@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import platform
 import subprocess
+from dataclasses import fields
 from typing import Any
 
 import typer
@@ -56,23 +57,50 @@ QUELLE_CONTACT_EMAIL=you@example.com
 """
 
 
+# Path-derived rows that go at the top of the `quelle config` output.
+# Keyed before the `Settings` field-walk so the user sees their layout
+# first; secret-bearing settings render with redaction applied.
+_PATH_FIELDS = ("config_dir", "data_dir", "cache_dir", "env_file", "cache_db", "pdf_dir")
+
+# `Settings` fields surfaced in `quelle config`. Any new field added to
+# `Settings` is silently absent from the rendered output until added
+# here — kept explicit on purpose so secrets aren't surfaced by accident.
+# Format: setting name → display formatter (None → use the raw value).
+_SETTINGS_DISPLAY: dict[str, Any] = {
+    "openalex_api_key": lambda s: s.openalex_key_redacted or "(unset)",
+    "semantic_scholar_api_key": lambda s: "(set)" if s.semantic_scholar_api_key else "(unset)",
+    "google_books_api_key": lambda s: "(set)" if s.google_books_api_key else "(unset)",
+    "unpaywall_email": lambda s: s.unpaywall_email or "(unset)",
+    "contact_email": lambda s: s.contact_email or "(unset)",
+    "user_agent": None,
+    "http_timeout": None,
+    "max_pdf_mb": None,
+}
+
+
 def _full_config_payload(settings: Settings) -> dict[str, Any]:
-    """Build the dict shown by bare `quelle config` (all values + paths)."""
+    """Build the dict shown by bare `quelle config` (all values + paths).
+
+    The `Settings` half is field-list-driven over `_SETTINGS_DISPLAY`
+    rather than hand-listed, so adding a new field to `Settings` plus
+    one entry here keeps `quelle config` truthful — and secrets stay
+    redacted. The path block is hand-listed because `Paths` is purely
+    derived state and the order matters for human readability.
+    """
+    settings_field_names = {f.name for f in fields(Settings)}
+    unknown = set(_SETTINGS_DISPLAY) - settings_field_names
+    if unknown:
+        # Programmer error — `_SETTINGS_DISPLAY` references a removed field.
+        raise RuntimeError(f"_SETTINGS_DISPLAY references unknown Settings: {sorted(unknown)}")
+
     p = settings.paths
-    return {
+    payload: dict[str, Any] = {
         "mode": "dev" if p.is_dev else "installed",
-        "config_dir": str(p.config_dir),
-        "data_dir": str(p.data_dir),
-        "cache_dir": str(p.cache_dir),
-        "env_file": str(p.env_file),
-        "cache_db": str(p.cache_db),
-        "pdf_dir": str(p.pdf_dir),
-        "openalex_api_key": settings.openalex_key_redacted or "(unset)",
-        "unpaywall_email": settings.unpaywall_email or "(unset)",
-        "contact_email": settings.contact_email or "(unset)",
-        "user_agent": settings.user_agent,
-        "http_timeout": settings.http_timeout,
+        **{name: str(getattr(p, name)) for name in _PATH_FIELDS},
     }
+    for name, formatter in _SETTINGS_DISPLAY.items():
+        payload[name] = formatter(settings) if formatter else getattr(settings, name)
+    return payload
 
 
 @config_app.callback(invoke_without_command=True)
@@ -81,8 +109,7 @@ def _config_root(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
     settings = load_settings()
-    json_flag = bool(ctx.obj and ctx.obj.get("json"))
-    render_config(_full_config_payload(settings), mode=OutputMode.detect(json_flag))
+    render_config(_full_config_payload(settings), mode=OutputMode.from_ctx(ctx))
 
 
 @config_app.command("edit")

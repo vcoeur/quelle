@@ -10,21 +10,22 @@ Two public entry points:
   (Crossref, Semantic Scholar) when possible. This is what the CLI
   `fetch` command uses.
 
-The resolver never touches the local cache; caching is bolted on
-inside `app.services.resolver` once Phase 2 lands (not here — keep
-this module focused on source orchestration).
+The book-source priority chain is the single tuple `BOOK_SOURCES` —
+both the primary fallback walk (`resolve_book_primary`) and the
+enrichment loop (`_enrich_book`) iterate it, so the order is in one
+place and stays consistent.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import replace
 
 import httpx
 
 from quelle._isbn import isbn10_to_13, isbn13_to_10
-from quelle.models.publication import Author, Publication
-from quelle.models.search import MergedHit
+from quelle.models.publication import Publication
 from quelle.repositories.cache import Cache
 from quelle.repositories.errors import NetworkError, NotFoundError, PublicationsError, UserError
 from quelle.repositories.sources import (
@@ -44,6 +45,23 @@ _SCHOLAR_HOST_RE = re.compile(r"scholar\.google\.\w+", re.IGNORECASE)
 _ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
 
 
+# Single source of truth for the book-source priority chain. The
+# `fetch_by_isbn` callable is captured via lambda so we can swap the
+# bound module in tests via `monkeypatch.setattr`.
+#
+# Order: Open Library (broad ISBN coverage) → Google Books (broad
+# fallback) → BnF (strong on French) → OpenAlex (last resort, prone
+# to false positives because OpenAlex doesn't index books by ISBN
+# natively). See `openalex.fetch_by_isbn` for the caveat.
+def _book_sources() -> tuple[tuple[str, Callable[[httpx.Client, Settings, str], Publication]], ...]:
+    return (
+        ("open_library", open_library.fetch_by_isbn),
+        ("google_books", google_books.fetch_by_isbn),
+        ("bnf", bnf.fetch_by_isbn),
+        ("openalex", openalex.fetch_by_isbn),
+    )
+
+
 def resolve(
     client: httpx.Client,
     settings: Settings,
@@ -56,10 +74,10 @@ def resolve(
 
     `type_hint` (`book` or `article`) and `author` only affect the
     free-text path: when either is set, the query is run through the
-    multi-source search service and the top hit is recursively
-    resolved via its DOI / ISBN / arXiv id. Explicit identifier
-    queries (DOI, ISBN, arXiv id) ignore both hints and resolve
-    directly.
+    multi-source search service via `resolve_top_hit` and either
+    synthesised from the merged hit or recursively resolved by id.
+    Explicit identifier queries (DOI, ISBN, arXiv id) ignore both
+    hints and resolve directly.
     """
     stripped = query.strip()
 
@@ -75,7 +93,7 @@ def resolve(
 
     isbn = _extract_isbn(stripped)
     if isbn:
-        return _resolve_book_primary(client, settings, isbn)
+        return resolve_book_primary(client, settings, isbn)
 
     doi_candidate = _extract_doi(stripped)
     if doi_candidate:
@@ -85,90 +103,19 @@ def resolve(
         return arxiv.fetch_by_arxiv_id(client, settings, stripped)
 
     if type_hint is not None or author is not None:
-        return _resolve_via_search(client, settings, stripped, type_hint, author)
+        from quelle.services.search import resolve_top_hit
+
+        return resolve_top_hit(client, settings, stripped, type_hint=type_hint, author=author)
 
     return openalex.search_by_title(client, settings, stripped)
 
 
-def _resolve_via_search(
-    client: httpx.Client,
-    settings: Settings,
-    query: str,
-    type_hint: str | None,
-    author: str | None,
-) -> Publication:
-    """Pick the top multi-source hit for a typed/authored query and resolve it.
-
-    If the top hit carries any of DOI / ISBN-13 / ISBN-10 / arXiv id,
-    we recurse into the regular id-based resolvers so the returned
-    Publication is fully populated. If the hit only has a source-native
-    id (e.g. an Open Library Work key), we synthesise a minimal
-    Publication from the SearchHit fields — the user gets back what
-    the search saw, just less rich than a DOI/ISBN-anchored fetch.
-    """
-    from quelle.services.search import search as multi_search
-
-    type_value = type_hint or "all"
-    hits = multi_search(
-        client,
-        settings,
-        query,
-        author=author,
-        type=type_value,  # type: ignore[arg-type]
-        limit=1,
-    )
-    if not hits:
-        raise NotFoundError(f"no match for {query!r} (type={type_value}, author={author!r})")
-    top = hits[0]
-    if top.doi:
-        return openalex.fetch_by_doi(client, settings, top.doi)
-    if top.isbn_13 or top.isbn_10:
-        return _resolve_book_primary(client, settings, top.isbn_13 or top.isbn_10)
-    if top.arxiv_id:
-        return arxiv.fetch_by_arxiv_id(client, settings, top.arxiv_id)
-    return _publication_from_merged_hit(top)
-
-
-def _publication_from_merged_hit(hit: MergedHit) -> Publication:
-    """Synthesise a Publication from a search hit with no fetchable identifier.
-
-    Fields not carried by SearchHit (abstract, citation count, OA flag,
-    PDF URL, venue) stay `None` / `[]`. The returned record is
-    intentionally shallow — the user should pass it through enrichment
-    or copy the title to a richer source if more is needed.
-    """
-    kind = hit.type if hit.type in {"book", "article"} else None
-    authors = [Author(name=a.name, orcid=a.orcid, affiliation=a.affiliation) for a in hit.authors]
-    return Publication(
-        title=hit.title,
-        authors=authors,
-        year=hit.year,
-        kind=kind,
-        doi=hit.doi,
-        isbn_10=hit.isbn_10,
-        isbn_13=hit.isbn_13,
-        arxiv_id=hit.arxiv_id,
-        resolved_from_chain=list(hit.sources),
-    )
-
-
-def _resolve_book_primary(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
-    """Try the book sources in priority order and return the first hit.
-
-    Order: Open Library (broad ISBN coverage) → Google Books (broad
-    fallback) → BnF (strong on French) → OpenAlex (last resort, prone
-    to false positives because OpenAlex doesn't index books by ISBN
-    natively). See `openalex.fetch_by_isbn` for the caveat.
-    """
+def resolve_book_primary(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
+    """Try the book sources in priority order and return the first hit."""
     last_error: PublicationsError | None = None
-    for source_call in (
-        lambda: open_library.fetch_by_isbn(client, settings, isbn),
-        lambda: google_books.fetch_by_isbn(client, settings, isbn),
-        lambda: bnf.fetch_by_isbn(client, settings, isbn),
-        lambda: openalex.fetch_by_isbn(client, settings, isbn),
-    ):
+    for _name, fetch in _book_sources():
         try:
-            return source_call()
+            return fetch(client, settings, isbn)
         except (NotFoundError, NetworkError) as exc:
             last_error = exc
             continue
@@ -202,7 +149,7 @@ def resolve_with_enrichment(
        Semantic Scholar.
     """
     if cache is not None:
-        hit = lookup_in_cache(cache, query, type_hint=type_hint, author=author)
+        hit = cache.lookup(query, type_hint=type_hint, author=author)
         if hit is not None:
             return hit
 
@@ -277,26 +224,23 @@ def _enrich_book(
 
     Stops as soon as the record is "complete enough" — has a publisher,
     a year, and either a description (abstract) or subjects. Each
-    source call is best-effort and swallowed on failure.
+    source call is best-effort and swallowed on failure. The
+    iteration order comes from `_book_sources` so the primary chain
+    and the enrichment loop never disagree.
     """
     isbn = current.isbn_13 or current.isbn_10
     if not isbn:
         return current
 
-    head = current.resolved_from_chain[0] if current.resolved_from_chain else None
-    fallback_calls: list[tuple[str, callable]] = [
-        ("open_library", lambda: open_library.fetch_by_isbn(client, settings, isbn)),
-        ("google_books", lambda: google_books.fetch_by_isbn(client, settings, isbn)),
-        ("bnf", lambda: bnf.fetch_by_isbn(client, settings, isbn)),
-        ("openalex", lambda: openalex.fetch_by_isbn(client, settings, isbn)),
-    ]
+    chain = current.resolved_from_chain
+    head = chain[0] if chain else None
 
-    for source_name, call in fallback_calls:
+    for source_name, fetch in _book_sources():
         if source_name == head:
             continue
         if _book_record_complete(current):
             break
-        current = _try_enrich(current, call)
+        current = _try_enrich(current, lambda f=fetch, i=isbn: f(client, settings, i))
     return current
 
 
@@ -305,48 +249,7 @@ def _book_record_complete(record: Publication) -> bool:
     return bool(record.publisher and record.year and (record.abstract or record.subjects))
 
 
-def lookup_in_cache(
-    cache: Cache,
-    query: str,
-    *,
-    type_hint: str | None = None,
-    author: str | None = None,
-) -> Publication | None:
-    """Try every cache lookup route for the given query string.
-
-    Identifier-based lookups (DOI / ISBN / arXiv id / OpenAlex id) are
-    always honoured — those are unambiguous. The title-fallback is
-    skipped when `type_hint` or `author` is set, since a cached entry
-    keyed by the exact title may have been resolved without that hint
-    and would short-circuit the explicit disambiguation.
-    """
-    stripped = query.strip()
-    isbn = _extract_isbn(stripped)
-    if isbn:
-        hit = cache.get_by_isbn(isbn)
-        if hit is not None:
-            return hit
-    doi = _extract_doi(stripped)
-    if doi:
-        hit = cache.get_by_doi(doi)
-        if hit is not None:
-            return hit
-    if _ARXIV_RE.match(stripped):
-        hit = cache.get_by_arxiv_id(arxiv._strip_version(stripped))
-        if hit is not None:
-            return hit
-    if stripped.startswith("https://openalex.org/") or stripped.startswith("openalex:"):
-        hit = cache.get_by_openalex_id(
-            stripped.removeprefix("openalex:") if stripped.startswith("openalex:") else stripped
-        )
-        if hit is not None:
-            return hit
-    if type_hint is not None or author is not None:
-        return None
-    return cache.get_by_title_exact(stripped)
-
-
-def _try_enrich(current: Publication, fetch):
+def _try_enrich(current: Publication, fetch: Callable[[], Publication]) -> Publication:
     """Run `fetch`, merge its result into `current`, swallow failures."""
     try:
         other = fetch()

@@ -73,8 +73,9 @@ Sources never decide the resolution order themselves — the `services/resolver.
 
 - DOI → OpenAlex (then Crossref + Semantic Scholar enrichment)
 - arXiv id → arXiv (then OpenAlex by title for a published version)
-- ISBN-10 / ISBN-13 → Open Library → Google Books → OpenAlex → BnF (best-effort fallback chain, then book-aware enrichment)
-- free text → OpenAlex `search` (article path; book search by title is not currently auto-detected — pass an ISBN for books)
+- ISBN-10 / ISBN-13 → Open Library → Google Books → BnF → OpenAlex (best-effort fallback chain, then book-aware enrichment)
+- free text without `--book` / `--article` and without an `author` hint → OpenAlex `search` (single-source, article-biased)
+- free text with `--book`, `--article`, or an `author` hint → multi-source `quelle.services.search`; the top merged hit is re-resolved by its DOI / ISBN / arXiv id, and a synthesised `Publication` is returned when no fetchable id is present
 
 ## Rate-limit discipline
 

@@ -44,9 +44,10 @@ def _patch_sources(monkeypatch: pytest.MonkeyPatch, fakes: dict[str, list[Search
     """Replace SOURCES with simple lambdas returning the given lists."""
     new_sources: dict[str, Any] = {}
     for name, hits in fakes.items():
-        original_covers = search_service.SOURCES.get(name)
-        covers = original_covers[1] if original_covers else {"article", "book"}
-        new_sources[name] = (lambda *_args, _hits=hits, **_kwargs: list(_hits), covers)
+        original = search_service.SOURCES.get(name)
+        covers = original[1] if original else {"article", "book"}
+        cap = original[2] if original else 200
+        new_sources[name] = (lambda *_args, _hits=hits, **_kwargs: list(_hits), covers, cap)
     monkeypatch.setattr(search_service, "SOURCES", new_sources)
 
 
@@ -93,10 +94,11 @@ def test_graceful_degradation_when_one_source_fails(monkeypatch: pytest.MonkeyPa
         search_service,
         "SOURCES",
         {
-            "openalex": (boom, {"article"}),
+            "openalex": (boom, {"article"}, 200),
             "semantic_scholar": (
                 lambda *_a, **_k: [_hit(source="semantic_scholar", rank=0, title="Survivor")],
                 {"article"},
+                100,
             ),
         },
     )
@@ -112,12 +114,14 @@ def test_type_filter_drops_book_sources(monkeypatch: pytest.MonkeyPatch) -> None
             "openalex": (
                 lambda *_a, **_k: [_hit(source="openalex", rank=0, title="Article", doi="10.1/a")],
                 {"article", "book"},
+                200,
             ),
             "open_library": (
                 lambda *_a, **_k: [
                     _hit(source="open_library", rank=0, title="Book", isbn_13="978000")
                 ],
                 {"book"},
+                100,
             ),
         },
     )
@@ -169,12 +173,14 @@ def test_sources_allowlist_narrows_query(monkeypatch: pytest.MonkeyPatch) -> Non
             "openalex": (
                 lambda *_a, **_k: [_hit(source="openalex", rank=0, title="A", doi="10.1/a")],
                 {"article"},
+                200,
             ),
             "semantic_scholar": (
                 lambda *_a, **_k: [
                     _hit(source="semantic_scholar", rank=0, title="B", doi="10.1/b")
                 ],
                 {"article"},
+                100,
             ),
         },
     )
@@ -263,10 +269,12 @@ def test_fuzzy_merge_skips_when_no_authors(monkeypatch: pytest.MonkeyPatch) -> N
             "open_library": (
                 lambda *_a, **_k: [_no_author("open_library", "Foo")],
                 {"book"},
+                100,
             ),
             "google_books": (
                 lambda *_a, **_k: [_no_author("google_books", "Foo")],
                 {"book"},
+                40,
             ),
         },
     )
@@ -302,6 +310,7 @@ def test_type_book_drops_article_hits_from_multi_type_source(
                     ),
                 ],
                 {"article", "book"},
+                200,
             ),
         },
     )
@@ -323,6 +332,7 @@ def test_type_book_keeps_unknown_hits(monkeypatch: pytest.MonkeyPatch) -> None:
                     _hit(source="openalex", rank=0, title="Maybe", type_="unknown"),
                 ],
                 {"article", "book"},
+                200,
             ),
         },
     )
@@ -342,7 +352,7 @@ def test_kind_hint_threaded_to_openalex(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(
         search_service,
         "SOURCES",
-        {"openalex": (fake_openalex, {"article", "book"})},
+        {"openalex": (fake_openalex, {"article", "book"}, 200)},
     )
     search_service.search(client=None, settings=None, query="x", type="book")  # type: ignore[arg-type]
     assert captured["kind"] == "book"

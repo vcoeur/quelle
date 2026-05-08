@@ -22,6 +22,23 @@ from quelle.repositories.errors import (
 )
 
 
+def resolve_type_hint(book: bool, article: bool) -> str | None:
+    """Translate the mutually-exclusive `--book` / `--article` flags into a hint.
+
+    Both absent → `None` (every source covered by the caller). Both
+    present is a user error; the caller is expected to surface it.
+    Pure logic, lifted out of `cli/main.py` for unit-testability without
+    the Typer runner.
+    """
+    if book and article:
+        raise UserError("--book and --article are mutually exclusive")
+    if book:
+        return "book"
+    if article:
+        return "article"
+    return None
+
+
 def looks_like_explicit_id(query: str) -> bool:
     """Cheap check: does the query look like a DOI, ISBN, or arXiv id?
 
