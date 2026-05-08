@@ -30,13 +30,10 @@ quelle fetch 1706.03762
 quelle --json fetch "The Perceptron: A Probabilistic Model"
 
 # Bias resolution toward books for an ambiguous title (delegates to `quelle search`).
-quelle fetch "Cannibal Capitalism" --type book
+quelle fetch "Cannibal Capitalism" --book
 
 # Comma in the query splits title from a single-name author hint.
-quelle fetch "Cannibal Capitalism, Fraser" --type book
-
-# Explicit --author (disables the comma heuristic).
-quelle fetch "Cannibal Capitalism" --author Fraser --type book
+quelle fetch "Cannibal Capitalism, Fraser" --book
 
 # Force a network round-trip even if the cache has an entry.
 quelle fetch 10.xxxx/yyyy --no-cache
@@ -45,7 +42,7 @@ quelle fetch 10.xxxx/yyyy --no-cache
 quelle fetch 1706.03762 --download-pdf
 ```
 
-`--type book|article|all` and `--author` only affect free-text queries — explicit DOI / ISBN / arXiv id queries always resolve directly. When set, fetch picks the top hit from `quelle search` (with the same `--type` / `--author` filters) and recurses into the regular id-based resolver to populate the full `Publication`. The title-based cache lookup is skipped in that case so a previously-cached article-on-this-title doesn't short-circuit the disambiguation.
+`--book` and `--article` are mutually exclusive and only affect free-text queries — explicit DOI / ISBN / arXiv id queries always resolve directly. When either flag is set, fetch picks the top hit from `quelle search` (with the same type filter) and recurses into the regular id-based resolver to populate the full `Publication`. The title-based cache lookup is skipped in that case so a previously-cached article-on-this-title doesn't short-circuit the disambiguation. The author hint comes from the comma-split heuristic on the query string itself — there is no separate `--author` flag.
 
 Google Scholar URLs are **not supported**: Scholar has no public API and its ToS prohibits automated access. If you only have a Scholar link, copy the paper title and feed that to `quelle fetch` — OpenAlex and Crossref together cover almost every paper with a DOI.
 
@@ -58,10 +55,7 @@ Browse candidate matches across every wired open source. Use this when a free-te
 quelle search "attention is all you need"
 
 # Comma in the query splits title from a single-name author hint.
-quelle search "etranger, camus" --type book
-
-# Explicit --author flag (disables the comma heuristic).
-quelle search "etranger" --author camus --type book
+quelle search "etranger, camus" --book
 
 # Restrict to specific sources and widen the result list.
 quelle --json search "transformer" --limit 10 --source openalex --source arxiv
@@ -71,12 +65,11 @@ Each hit is a publication merged across the sources that returned it. Hits are m
 
 Flags:
 
-- `--author TEXT` — author hint, threaded into native author fields where the source supports one (OpenAlex filter, Open Library `author=`, Google Books `inauthor:`, arXiv `au:`, BnF `bib.author`); otherwise folded into the query. Setting this flag disables the comma heuristic on the positional query.
-- `--type book|article|all` — restricts the source set. `all` (default) queries all six wired sources.
+- `--book` / `--article` — mutually exclusive. Restrict to book sources or article sources. Both absent (default) queries all wired sources.
 - `--limit INTEGER` — final merged-list size. **Default 3.**
 - `--source NAME` — repeatable allowlist. Names: `openalex`, `semantic_scholar`, `arxiv`, `open_library`, `google_books`, `bnf`. There is no denylist flag — pass the explicit allowlist instead.
 
-**Comma-split heuristic.** When `--author` is not given and the query contains a comma, the trailing piece is treated as an author hint if it is 1-3 tokens with no digits (so `"foo, smith"` splits, `"foo, 2024"` does not, `"foo, alpha beta gamma delta"` does not). The split is conservative on purpose — titles with internal commas survive as long as they do not end with a name-shaped fragment.
+**Comma-split heuristic.** When the query contains a comma, the trailing piece is treated as an author hint if it is 1-3 tokens with no digits (so `"foo, smith"` splits, `"foo, 2024"` does not, `"foo, alpha beta gamma delta"` does not). The author is then threaded into native author fields where the source supports one (OpenAlex filter, Open Library `author=`, Google Books `inauthor:`, arXiv `au:`, BnF `bib.author`); otherwise it is folded into the query. The split is conservative on purpose — titles with internal commas survive as long as they do not end with a name-shaped fragment. There is no separate `--author` flag: a real title that ends with a name-shaped comma fragment will be misread, so fall back to `quelle search` and pick by id.
 
 If a single source fails (network error, rate limit), `quelle search` logs a warning and returns the merged hits from the remaining sources rather than failing the whole call.
 

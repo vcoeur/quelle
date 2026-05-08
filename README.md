@@ -114,7 +114,7 @@ quelle fetch 10.xxxx/yyyy --no-cache
 
 # Search across multiple open sources, then resolve the chosen hit.
 quelle search "attention is all you need"
-quelle search "etranger, camus" --type book          # comma splits title from author hint
+quelle search "etranger, camus" --book               # comma splits title from author hint
 quelle --json search "transformer" --limit 5 --source openalex --source arxiv
 
 # Inspect the cache (`list` includes a header with the total / last upsert / schema).
