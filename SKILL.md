@@ -2,7 +2,7 @@
 name: quelle
 description: Fetch publication metadata (title, authors, year, DOI/ISBN, abstract, citation count) and optionally the open-access PDF, given a DOI, arXiv id, ISBN-10/13, or free-text title. Handles both academic articles and books — walks a fallback chain of free open APIs (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and returns a normalised JSON blob. Has no knowledge of any particular note-taking system. Use when the user says "look up this paper", "get metadata for DOI 10.xxx", "find the arXiv entry for X", "find this book by ISBN", or pastes any publication identifier with intent to retrieve information about it. Google Scholar URLs are not supported — ask the user to copy the title and pass it as free text instead.
 argument-hint: "<DOI | arXiv id | ISBN | title>"
-allowed-tools: Read, Write, Edit, Bash(quelle fetch:*), Bash(quelle cache:*), Bash(quelle config:*), Bash(quelle init:*), Bash(quelle version:*), Bash(python3:*), Bash(jq:*), Bash(command -v quelle:*)
+allowed-tools: Read, Write, Edit, Bash(quelle fetch:*), Bash(quelle cache:*), Bash(quelle config:*), Bash(quelle search:*), Bash(quelle --version:*), Bash(quelle --json:*), Bash(python3:*), Bash(jq:*), Bash(command -v quelle:*)
 ---
 
 Thin wrapper around the [`quelle`](https://github.com/vcoeur/quelle) CLI. Given an identifier or title, resolve the paper through free open APIs and print its normalised JSON record.
@@ -50,11 +50,10 @@ pipx install quelle
 uv tool install quelle
 ```
 
-First-time bootstrap creates the config, data, and cache dirs and seeds a default `.env`:
+First-time setup: opening the editor on the `.env` is enough — `config edit` seeds a default template the first time it runs, and the data / cache dirs are created automatically by any subsequent command.
 
 ```bash
-quelle init
-quelle config edit   # fill in QUELLE_CONTACT_EMAIL
+quelle config edit   # creates the .env on first run, then fill in QUELLE_CONTACT_EMAIL
 ```
 
 `QUELLE_CONTACT_EMAIL` goes into the User-Agent and enrolls you in the Crossref / OpenAlex polite pool. **Do not fake the address** — Unpaywall uses it to contact you if something goes wrong. Use your real email.
@@ -65,19 +64,19 @@ quelle config edit   # fill in QUELLE_CONTACT_EMAIL
 
 ## Run it
 
-Call `quelle fetch` with `--json` and parse the result:
+Call `quelle fetch` with the global `--json` flag (place it **before** the subcommand) and parse the result:
 
 ```bash
-quelle fetch "$ARGUMENTS" --json > /tmp/paper.json
+quelle --json fetch "$ARGUMENTS" > /tmp/paper.json
 ```
 
 Add `--download-pdf` if you also want the OA PDF saved under the local data dir (respecting the upstream per-source rate limits):
 
 ```bash
-quelle fetch "$ARGUMENTS" --download-pdf --json > /tmp/paper.json
+quelle --json fetch "$ARGUMENTS" --download-pdf > /tmp/paper.json
 ```
 
-`quelle config path` prints the exact data-dir location where PDFs land (OS-dependent via `platformdirs`).
+`quelle config` prints the resolved paths, including the data-dir where PDFs land (OS-dependent via `platformdirs`).
 
 Then show the key fields to the user:
 
@@ -123,9 +122,8 @@ On a non-zero exit, print the stderr from `quelle fetch` verbatim and stop — d
 Repeated lookups for the same identifier are served from a local SQLite cache — no network. Useful commands:
 
 ```bash
-quelle cache stats          # total + last upsert + schema version
-quelle cache list           # most-recent cached papers
-quelle cache show 10.xxx/y  # offline lookup by DOI / arXiv id / title
+quelle cache list           # header (total + last upsert + schema) followed by recent entries
+quelle cache show 10.xxx/y  # offline lookup by DOI / arXiv id / ISBN / title
 quelle cache clear --yes    # wipe everything (irreversible)
 ```
 

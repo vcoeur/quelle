@@ -1,4 +1,4 @@
-"""Tests for the `quelle config` sub-app and the `quelle init` command."""
+"""Tests for the `quelle config` sub-app."""
 
 from __future__ import annotations
 
@@ -30,48 +30,19 @@ def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path,
     return config, data, cache
 
 
-def test_init_creates_dirs_and_seeds_env(isolated_env: tuple[Path, Path, Path]) -> None:
+def test_config_root_creates_dirs(isolated_env: tuple[Path, Path, Path]) -> None:
+    """Bare `quelle config` runs ensure_dirs via load_settings()."""
     config, data, cache = isolated_env
-    result = runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["config"])
     assert result.exit_code == 0
     assert config.is_dir()
     assert (data / "pdfs").is_dir()
     assert cache.is_dir()
-    env_file = config / ".env"
-    assert env_file.exists()
-    assert "QUELLE_CONTACT_EMAIL" in env_file.read_text()
-    assert "created" in result.output.lower()
 
 
-def test_init_is_idempotent(isolated_env: tuple[Path, Path, Path]) -> None:
-    config, _data, _cache = isolated_env
-    env_file = config / ".env"
-
-    runner.invoke(app, ["init"])
-    env_file.write_text("QUELLE_CONTACT_EMAIL=first@example.com\n")
-
-    result = runner.invoke(app, ["init"])
-    assert result.exit_code == 0
-    # Second run must not overwrite the user's edits.
-    assert env_file.read_text() == "QUELLE_CONTACT_EMAIL=first@example.com\n"
-    assert "already present" in result.output.lower()
-
-
-def test_config_path_plain(isolated_env: tuple[Path, Path, Path]) -> None:
+def test_config_root_json_payload(isolated_env: tuple[Path, Path, Path]) -> None:
     config, data, cache = isolated_env
-    result = runner.invoke(app, ["config", "path"])
-    assert result.exit_code == 0
-    out = result.output
-    assert f"config_dir: {config}" in out
-    assert f"data_dir: {data}" in out
-    assert f"cache_dir: {cache}" in out
-    assert "mode:" in out
-    assert "env_file:" in out
-
-
-def test_config_path_json(isolated_env: tuple[Path, Path, Path]) -> None:
-    config, data, cache = isolated_env
-    result = runner.invoke(app, ["config", "path", "--json"])
+    result = runner.invoke(app, ["--json", "config"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert payload["config_dir"] == str(config)
@@ -82,11 +53,11 @@ def test_config_path_json(isolated_env: tuple[Path, Path, Path]) -> None:
     assert payload["mode"] in {"dev", "installed"}
 
 
-def test_config_edit_honours_editor(
+def test_config_edit_seeds_env_on_first_run(
     isolated_env: tuple[Path, Path, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`config edit` spawns the editor named in $EDITOR with the env_file path."""
+    """First `config edit` writes the default .env and prints a 'created' line."""
     captured: list[list[str]] = []
 
     def _fake_run(cmd: list[str], check: bool = False) -> None:
@@ -98,14 +69,39 @@ def test_config_edit_honours_editor(
     monkeypatch.delenv("VISUAL", raising=False)
     monkeypatch.setenv("EDITOR", "my-fake-editor")
 
+    config, _data, _cache = isolated_env
+    env_file = config / ".env"
+    assert not env_file.exists()
     result = runner.invoke(app, ["config", "edit"])
     assert result.exit_code == 0
-    assert captured, "subprocess.run was not called"
-    assert captured[0][0] == "my-fake-editor"
-    # The second argument is the .env path.
-    assert captured[0][1].endswith(".env")
-    # The file should have been seeded because it did not exist.
-    assert Path(captured[0][1]).exists()
+    assert env_file.exists()
+    assert "QUELLE_CONTACT_EMAIL" in env_file.read_text()
+    assert "Created" in result.output
+    # Editor should have been spawned with the env_file path.
+    assert captured and captured[0][0] == "my-fake-editor"
+    assert captured[0][1] == str(env_file)
+
+
+def test_config_edit_no_seed_when_env_exists(
+    isolated_env: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the .env already exists, edit does not overwrite or print 'created'."""
+    config, _data, _cache = isolated_env
+    env_file = config / ".env"
+    config.mkdir(parents=True, exist_ok=True)
+    env_file.write_text("QUELLE_CONTACT_EMAIL=first@example.com\n")
+
+    import quelle.cli.config as cfg
+
+    monkeypatch.setattr(cfg.subprocess, "run", lambda cmd, check=False: None)
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "my-fake-editor")
+
+    result = runner.invoke(app, ["config", "edit"])
+    assert result.exit_code == 0
+    assert env_file.read_text() == "QUELLE_CONTACT_EMAIL=first@example.com\n"
+    assert "Created" not in result.output
 
 
 def test_config_edit_visual_beats_editor(

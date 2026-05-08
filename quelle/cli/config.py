@@ -1,18 +1,14 @@
 """`quelle config` sub-app — inspect and edit the user's configuration.
 
-Three subcommands:
+Two surfaces:
 
-- `quelle config show` — dump the effective configuration (same format as
-  before the refactor, now reachable under `show`).
-- `quelle config path` — print just the resolved config/data/cache paths.
-  Small, grep-friendly output suitable for shell scripts.
+- `quelle config` — dump the effective configuration (env + .env layers,
+  resolved paths, and redacted API key). The bare invocation works via the
+  Typer callback's `invoke_without_command=True`.
 - `quelle config edit` — open the `.env` file in `$VISUAL` / `$EDITOR` or the
-  OS default editor. On Windows this means users never have to navigate
-  `%APPDATA%` manually.
-
-The `init_command` helper is invoked by the top-level `quelle init` command
-in `main.py`; it creates the standard directories and seeds a default `.env`
-if none exists.
+  OS default editor. Seeds a default `.env` from the bundled template if the
+  file is missing, and prints a one-line "created" hint so the user knows it
+  is a brand-new file.
 """
 
 from __future__ import annotations
@@ -24,12 +20,12 @@ from typing import Any
 
 import typer
 
-from quelle.cli.output import OutputMode, emit_json, render_config
+from quelle.cli.output import OutputMode, render_config
 from quelle.settings import Settings, load_settings
 
 config_app = typer.Typer(
-    help="Inspect and edit the quelle configuration.",
-    no_args_is_help=True,
+    help="Inspect and edit the quelle configuration. Bare `quelle config` shows everything.",
+    invoke_without_command=True,
 )
 
 
@@ -61,7 +57,7 @@ QUELLE_CONTACT_EMAIL=you@example.com
 
 
 def _full_config_payload(settings: Settings) -> dict[str, Any]:
-    """Build the dict emitted by `config show` (all values + paths)."""
+    """Build the dict shown by bare `quelle config` (all values + paths)."""
     p = settings.paths
     return {
         "mode": "dev" if p.is_dev else "installed",
@@ -79,76 +75,34 @@ def _full_config_payload(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _paths_payload(settings: Settings) -> dict[str, str]:
-    """Build the dict emitted by `config path` (paths only)."""
-    p = settings.paths
-    return {
-        "mode": "dev" if p.is_dev else "installed",
-        "config_dir": str(p.config_dir),
-        "data_dir": str(p.data_dir),
-        "cache_dir": str(p.cache_dir),
-        "env_file": str(p.env_file),
-        "cache_db": str(p.cache_db),
-        "pdf_dir": str(p.pdf_dir),
-    }
-
-
-@config_app.command("show")
-def config_show(
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
-) -> None:
-    """Show the effective configuration (env + .env layers)."""
+@config_app.callback(invoke_without_command=True)
+def _config_root(ctx: typer.Context) -> None:
+    """Show the effective configuration when no subcommand is given."""
+    if ctx.invoked_subcommand is not None:
+        return
     settings = load_settings()
-    mode = OutputMode.detect(json_output)
-    render_config(_full_config_payload(settings), mode=mode)
-
-
-@config_app.command("path")
-def config_path(
-    json_output: bool = typer.Option(False, "--json", help="Emit JSON instead of text."),
-) -> None:
-    """Print the resolved config, data, and cache directories."""
-    settings = load_settings()
-    payload = _paths_payload(settings)
-    mode = OutputMode.detect(json_output)
-    if mode.json:
-        emit_json(payload)
-    else:
-        for key, value in payload.items():
-            typer.echo(f"{key}: {value}")
+    json_flag = bool(ctx.obj and ctx.obj.get("json"))
+    render_config(_full_config_payload(settings), mode=OutputMode.detect(json_flag))
 
 
 @config_app.command("edit")
 def config_edit() -> None:
-    """Open the quelle .env file in $VISUAL / $EDITOR or the OS default editor."""
+    """Open the quelle .env file in $VISUAL / $EDITOR or the OS default editor.
+
+    Seeds the .env from the bundled template when the file does not yet
+    exist; prints a one-line "created" hint in that case so the user
+    knows the editor is opening a fresh template, not their previous
+    edits.
+    """
     settings = load_settings()
     env_file = settings.paths.env_file
     created = _ensure_env_file(settings)
     editor = _resolve_editor()
     if created:
         typer.echo(f"Created {env_file} from the default template.")
+        typer.echo("Set QUELLE_CONTACT_EMAIL for the Crossref / OpenAlex polite pool.")
     typer.echo(f"Opening {env_file} in {editor!r}")
     subprocess.run([editor, str(env_file)], check=False)
-
-
-def init_command() -> None:
-    """Implementation of the top-level `quelle init` command."""
-    settings = load_settings()  # already runs migrate + ensure_dirs
-    created = _ensure_env_file(settings)
-    p = settings.paths
-    typer.echo(f"mode: {'dev' if p.is_dev else 'installed'}")
-    typer.echo(f"config_dir: {p.config_dir}")
-    typer.echo(f"data_dir: {p.data_dir}")
-    typer.echo(f"cache_dir: {p.cache_dir}")
-    suffix = "(created)" if created else "(already present)"
-    typer.echo(f"env_file: {p.env_file} {suffix}")
-    if created:
-        typer.echo("")
-        typer.echo(
-            "Next: set QUELLE_CONTACT_EMAIL in the .env (used for the "
-            "Crossref / OpenAlex polite pool)."
-        )
-        typer.echo("Run `quelle config edit` to open it in your editor.")
 
 
 def _ensure_env_file(settings: Settings) -> bool:

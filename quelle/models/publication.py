@@ -13,10 +13,30 @@ are omitted from rendering rather than gating logic on `kind`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from typing import Literal
+from dataclasses import dataclass, field, fields, replace
+from typing import Any, Literal
 
 Kind = Literal["article", "preprint", "book", "book-chapter"]
+
+# Fields handled out-of-band by `Publication.merged_with`; everything else
+# is folded automatically by the field-list-driven loop. Keeping the skip
+# set tiny means new fields enrich for free without anyone remembering to
+# touch the merge function.
+_MERGE_SKIP_FIELDS: frozenset[str] = frozenset({"resolved_from_chain"})
+
+
+def _is_missing(value: Any) -> bool:
+    """True when a field value should be treated as "fill me from `other`".
+
+    None, empty string, empty list/dict/tuple all qualify. False, 0, and
+    other meaningful zero-valued scalars do not — they are real values
+    set by upstream sources and must not be overwritten.
+    """
+    if value is None:
+        return True
+    if isinstance(value, (str, list, dict, tuple)):
+        return not value
+    return False
 
 
 @dataclass(frozen=True)
@@ -104,43 +124,26 @@ class Publication:
         with missing-field data from Crossref / Semantic Scholar /
         arXiv. The `resolved_from_chain` of `other` is appended to
         `self`'s chain, deduplicated, preserving order.
+
+        Driven by `dataclasses.fields(Publication)` minus `_MERGE_SKIP_FIELDS`,
+        so any new field added to the dataclass enriches automatically.
         """
         updates: dict[str, object] = {}
-        for f in (
-            "year",
-            "venue",
-            "publisher",
-            "doi",
-            "arxiv_id",
-            "openalex_id",
-            "semantic_scholar_id",
-            "isbn_10",
-            "isbn_13",
-            "edition",
-            "page_count",
-            "kind",
-            "abstract",
-            "citation_count",
-            "is_open_access",
-            "pdf_url",
-            "local_pdf_path",
-            "source_url",
-            "journal_volume",
-            "journal_issue",
-            "page_range",
-        ):
-            if getattr(self, f) is None:
-                other_value = getattr(other, f)
-                if other_value is not None:
-                    updates[f] = other_value
-        if not self.title and other.title:
-            updates["title"] = other.title
-        if not self.authors and other.authors:
-            updates["authors"] = list(other.authors)
-        if not self.topics and other.topics:
-            updates["topics"] = list(other.topics)
-        if not self.subjects and other.subjects:
-            updates["subjects"] = list(other.subjects)
+        for f in fields(self):
+            if f.name in _MERGE_SKIP_FIELDS:
+                continue
+            my_value = getattr(self, f.name)
+            if not _is_missing(my_value):
+                continue
+            other_value = getattr(other, f.name)
+            if _is_missing(other_value):
+                continue
+            if isinstance(other_value, list):
+                updates[f.name] = list(other_value)
+            elif isinstance(other_value, dict):
+                updates[f.name] = dict(other_value)
+            else:
+                updates[f.name] = other_value
 
         merged_chain = list(self.resolved_from_chain)
         for tag in other.resolved_from_chain:

@@ -60,20 +60,18 @@ def search(
     author: str | None = None,
     type: SearchType = "all",
     sources: list[str] | None = None,
-    no_sources: list[str] | None = None,
     limit: int = 3,
 ) -> list[MergedHit]:
     """Run a multi-source search and return up to `limit` merged hits.
 
     Source set is selected from `SOURCES` by `type`, then narrowed by
-    `sources` (allowlist) and `no_sources` (denylist) if provided.
-    Per-source pull size is `max(limit * 2, 20)` so RRF has material
-    to merge after dedup.
+    `sources` (allowlist) if provided. Per-source pull size is
+    `max(limit * 2, 20)` so RRF has material to merge after dedup.
     """
     if limit < 1:
         raise UserError("--limit must be at least 1")
 
-    selected = _select_sources(type, sources, no_sources)
+    selected = _select_sources(type, sources)
     per_source_limit = max(limit * 2, 20)
 
     kind_hint = type if type in {"book", "article"} else None
@@ -105,12 +103,10 @@ def search(
 def _select_sources(
     type: SearchType,
     sources: list[str] | None,
-    no_sources: list[str] | None,
 ) -> dict[str, Callable[..., list[SearchHit]]]:
-    """Pick the source set for this run, validating any user filters."""
+    """Pick the source set for this run, validating any user filter."""
     allow = {name.strip() for name in sources or [] if name.strip()}
-    deny = {name.strip() for name in no_sources or [] if name.strip()}
-    unknown = (allow | deny) - SOURCES.keys()
+    unknown = allow - SOURCES.keys()
     if unknown:
         raise UserError(f"unknown source(s): {', '.join(sorted(unknown))}")
 
@@ -119,8 +115,6 @@ def _select_sources(
         if type != "all" and type not in covers:
             continue
         if allow and name not in allow:
-            continue
-        if name in deny:
             continue
         selected[name] = fn
 
@@ -220,40 +214,15 @@ def _seed(hit: SearchHit) -> MergedHit:
 
 
 def _absorb(merged: MergedHit, hit: SearchHit) -> MergedHit:
-    """Fold a new hit into an existing MergedHit, updating score and ids."""
-    sources = list(merged.sources)
-    if hit.source not in sources:
-        sources.append(hit.source)
-    source_ids = dict(merged.source_ids)
-    if hit.source_id:
-        source_ids.setdefault(hit.source, hit.source_id)
+    """Fold a fresh `SearchHit` into a `MergedHit`.
 
-    authors = merged.authors if len(merged.authors) >= len(hit.authors) else list(hit.authors)
-    title = merged.title or hit.title
-
-    new_type: HitType = merged.type
-    if merged.type == "unknown":
-        new_type = hit.type
-    elif hit.type != "unknown" and hit.type != merged.type:
-        # book/article disagreement — fall back to unknown rather than picking
-        new_type = "unknown"
-
-    year = merged.year if merged.year is not None else hit.year
-
-    return replace(
-        merged,
-        title=title,
-        authors=_dedupe_authors(authors),
-        year=year,
-        type=new_type,
-        doi=merged.doi or hit.doi,
-        isbn_13=merged.isbn_13 or hit.isbn_13,
-        isbn_10=merged.isbn_10 or hit.isbn_10,
-        arxiv_id=merged.arxiv_id or hit.arxiv_id,
-        sources=sources,
-        source_ids=source_ids,
-        score=merged.score + _rrf_term(hit.raw_rank),
-    )
+    Delegates to `_absorb_merged` after wrapping the hit in a single-
+    source `MergedHit` via `_seed`. That keeps merge logic + precedence
+    rules in one place; the only difference between absorbing a hit and
+    absorbing a previously-merged record is how the incoming score is
+    derived (RRF term for a raw hit, accumulated score for a merge).
+    """
+    return _absorb_merged(merged, _seed(hit))
 
 
 def _dedup_by_similarity(merged: list[MergedHit]) -> list[MergedHit]:

@@ -170,15 +170,25 @@ def render_search(payload: dict[str, Any], *, mode: OutputMode) -> None:
 
 
 def render_cache_list(payload: dict[str, Any], *, mode: OutputMode) -> None:
-    """Render a list of cache entries."""
+    """Render a list of cache entries with a header summary.
+
+    The header carries the total row count, schema version, and last
+    upsert timestamp — what `cache stats` used to print on its own.
+    """
     if mode.json:
         emit_json(payload)
         return
     entries = payload.get("entries") or []
+    total = payload.get("total", 0)
+    newest = (payload.get("newest_cached_at") or "")[:19] or "(empty)"
+    schema = payload.get("schema_version", "?")
+    _console.print(
+        f"[bold]cache:[/bold] {total} entr{'y' if total == 1 else 'ies'}  "
+        f"[dim]· last upsert {newest} · schema v{schema}[/dim]"
+    )
     if not entries:
-        _console.print("[dim]cache is empty[/dim]")
         return
-    table = Table(title=f"{len(entries)} cached publication(s)")
+    table = Table(box=None, padding=(0, 1))
     table.add_column("Citekey", style="bold")
     table.add_column("DOI", style="cyan")
     table.add_column("Title", overflow="fold")

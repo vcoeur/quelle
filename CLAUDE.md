@@ -95,6 +95,19 @@ make format        # ruff check --fix + format
 make tool-install  # install `quelle` globally via `uv tool install`
 ```
 
+## CLI surface
+
+```
+quelle [--version | --json] {fetch | search | cache | config}
+```
+
+- `quelle fetch <id-or-title>` — resolve a single publication.
+- `quelle search <query>` — list candidate hits across every wired source.
+- `quelle cache {list,show,clear}` — inspect or wipe the SQLite cache.
+- `quelle config` — show effective config (bare invocation); `quelle config edit` opens the `.env` in `$VISUAL` / `$EDITOR`.
+
+`--json` is a top-level flag — place it **before** the subcommand (`quelle --json fetch …`). There is no `quelle init`: first invocation creates the dirs via `load_settings()`, and `quelle config edit` seeds the `.env` template on first run.
+
 ## Workflow
 
 1. After any code change: `make format` — enforced by ruff.
