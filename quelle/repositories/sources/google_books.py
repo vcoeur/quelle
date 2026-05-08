@@ -4,10 +4,18 @@ Public Volumes API (`https://www.googleapis.com/books/v1/volumes`).
 No key required for low-volume reads (1k requests/day per IP), but
 an optional `GOOGLE_BOOKS_API_KEY` is honoured for higher quotas.
 Schema: https://developers.google.com/books/docs/v1/reference/volumes
+
+A module-level lock enforces a 100 ms minimum interval between calls
+(~10 req/s, well inside the 1k/day default cap when the cap is
+spread across the day). This keeps a tight loop of `quelle search`
+calls polite without callers having to sleep manually. Same pattern
+as `arxiv.py` and `unpaywall.py`.
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -21,6 +29,28 @@ from quelle.settings import Settings
 VOLUMES_URL = "https://www.googleapis.com/books/v1/volumes"
 SOURCE_NAME = "google_books"
 
+_MIN_INTERVAL_SECONDS = 0.1
+_LAST_CALL_AT = 0.0
+_RATE_LOCK = threading.Lock()
+
+
+def _rate_limit() -> None:
+    """Sleep just long enough to respect Google Books' polite cadence."""
+    global _LAST_CALL_AT
+    with _RATE_LOCK:
+        now = time.monotonic()
+        elapsed = now - _LAST_CALL_AT
+        if elapsed < _MIN_INTERVAL_SECONDS:
+            time.sleep(_MIN_INTERVAL_SECONDS - elapsed)
+        _LAST_CALL_AT = time.monotonic()
+
+
+def _reset_rate_limit_for_tests() -> None:
+    """Test hook — clears the last-call timestamp so tests don't pay 100 ms."""
+    global _LAST_CALL_AT
+    with _RATE_LOCK:
+        _LAST_CALL_AT = 0.0
+
 
 def _auth_params(settings: Settings) -> dict[str, str]:
     if settings.google_books_api_key:
@@ -28,9 +58,23 @@ def _auth_params(settings: Settings) -> dict[str, str]:
     return {}
 
 
+def _escape_query(value: str) -> str:
+    """Strip double quotes from user input before splicing into a `q=` value.
+
+    Google Books does not document a query escape mechanism for the
+    `intitle:` / `inauthor:` qualifiers; bare double quotes inside a
+    qualifier value have been observed to break the URL parser.
+    Stripping them gives the same value across adapters that use
+    quoted CQL (arXiv, BnF) and adapters that do not — `M` in the
+    audit table.
+    """
+    return value.replace('"', "").strip()
+
+
 def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
     """Return the top Google Books volume for a specific ISBN."""
     params = {"q": f"isbn:{isbn}", "maxResults": "1", **_auth_params(settings)}
+    _rate_limit()
     payload = get_json(client, VOLUMES_URL, params=params)
     items = payload.get("items") or []
     if not items:
@@ -40,7 +84,8 @@ def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Public
 
 def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Publication:
     """Return the top Google Books volume for a free-text title query."""
-    params = {"q": f"intitle:{title}", "maxResults": "1", **_auth_params(settings)}
+    params = {"q": f"intitle:{_escape_query(title)}", "maxResults": "1", **_auth_params(settings)}
+    _rate_limit()
     payload = get_json(client, VOLUMES_URL, params=params)
     items = payload.get("items") or []
     if not items:
@@ -62,14 +107,18 @@ def search(
     Uses Google Books' field qualifiers (`intitle:` for the query and
     `inauthor:` when an author hint is provided) so the underlying
     relevance ranker biases on each field rather than mashing them
-    into a single bag-of-words. `kind` is accepted for signature
-    uniformity but ignored — Google Books only indexes books.
+    into a single bag-of-words. Qualifiers are space-separated per the
+    Google Books API docs — httpx URL-encodes the space and Google's
+    parser then sees them as distinct AND-combined qualifiers. `kind`
+    is accepted for signature uniformity but ignored — Google Books
+    only indexes books.
     """
     del kind
-    parts = [f"intitle:{query}"]
+    parts = [f"intitle:{_escape_query(query)}"]
     if author:
-        parts.append(f"inauthor:{author}")
-    params = {"q": "+".join(parts), "maxResults": str(limit), **_auth_params(settings)}
+        parts.append(f"inauthor:{_escape_query(author)}")
+    params = {"q": " ".join(parts), "maxResults": str(limit), **_auth_params(settings)}
+    _rate_limit()
     payload = get_json(client, VOLUMES_URL, params=params)
     items = payload.get("items") or []
     return [_to_search_hit(item, rank) for rank, item in enumerate(items)]

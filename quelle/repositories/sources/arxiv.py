@@ -93,14 +93,18 @@ def search(
 
     `author`, when provided, is added with the `au:` qualifier; the
     title query uses `ti:` so multi-word inputs aren't broken up.
-    `kind` is accepted for signature uniformity but ignored — arXiv
-    only carries preprints.
+    Internal double quotes in the user input are stripped — arXiv's
+    CQL has no documented quote-escape mechanism and a query
+    containing them produced malformed CQL pre-v0.8. `kind` is
+    accepted for signature uniformity but ignored — arXiv only
+    carries preprints.
     """
     del settings
     del kind
-    parts = [f'ti:"{query}"']
+    title = query.replace('"', "").strip()
+    parts = [f'ti:"{title}"']
     if author:
-        parts.append(f'au:"{author}"')
+        parts.append(f'au:"{author.replace(chr(34), "").strip()}"')
     search_query = " AND ".join(parts)
     _rate_limit()
     try:

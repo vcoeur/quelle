@@ -22,7 +22,36 @@ Kind = Literal["article", "preprint", "book", "book-chapter"]
 # is folded automatically by the field-list-driven loop. Keeping the skip
 # set tiny means new fields enrich for free without anyone remembering to
 # touch the merge function.
-_MERGE_SKIP_FIELDS: frozenset[str] = frozenset({"resolved_from_chain"})
+#
+# Merge contract for the auto-folded fields:
+#
+# 1. **Sticky identifiers.** `doi`, `arxiv_id`, `openalex_id`,
+#    `semantic_scholar_id`, `isbn_10`, `isbn_13` are first-source-wins:
+#    once a non-empty value is set, no later source overwrites it. This
+#    is intentional — an OpenAlex DOI is taken as authoritative even if
+#    a later Crossref payload disagrees. The flip-side is that a
+#    misnormalised id from an earlier source sticks for the rest of the
+#    chain; sources are responsible for emitting normalised ids.
+# 2. **Opportunistic fills.** Every other scalar / list / dict field
+#    fills only when the base record has no value (`None`, `""`, `[]`,
+#    `{}`). False / 0 are real values and never trigger fills.
+# 3. **`kind` precedence ladder.** `kind` is opportunistically filled
+#    when missing, but if both base and other set it, `book-chapter`
+#    wins over `article` (chapter-with-DOI case where OpenAlex
+#    misclassifies); `book` likewise wins over `article` when both are
+#    set. `preprint` and `article` tie — first-wins.
+# 4. **`resolved_from_chain` is appended**, deduplicated, preserving
+#    order — handled out of band.
+_MERGE_SKIP_FIELDS: frozenset[str] = frozenset({"resolved_from_chain", "kind"})
+
+# Precedence ladder used when both base and other set `kind`.
+# Higher rank wins. Equal ranks keep the base value.
+_KIND_PRIORITY: dict[str, int] = {
+    "book-chapter": 3,
+    "book": 2,
+    "article": 1,
+    "preprint": 1,
+}
 
 
 def _is_missing(value: Any) -> bool:
@@ -151,4 +180,23 @@ class Publication:
                 merged_chain.append(tag)
         updates["resolved_from_chain"] = merged_chain
 
+        merged_kind = _merge_kind(self.kind, other.kind)
+        if merged_kind != self.kind:
+            updates["kind"] = merged_kind
+
         return replace(self, **updates)
+
+
+def _merge_kind(base: Kind | None, other: Kind | None) -> Kind | None:
+    """Resolve `kind` per the precedence ladder.
+
+    Missing values are filled from the other side. When both are set,
+    `_KIND_PRIORITY` decides which wins. Equal ranks keep the base.
+    """
+    if base is None:
+        return other
+    if other is None:
+        return base
+    base_rank = _KIND_PRIORITY.get(base, 0)
+    other_rank = _KIND_PRIORITY.get(other, 0)
+    return other if other_rank > base_rank else base

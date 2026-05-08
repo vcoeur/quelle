@@ -1,10 +1,19 @@
 """Local SQLite cache for resolved publications.
 
-Keyed by DOI, OpenAlex id, arXiv id, and exact title (last-resort).
-Writes store the full serialised `Publication` as a JSON blob in the
-`payload_json` column so schema evolution on the Python side doesn't
-require a schema migration. The structured id columns are there so
-we can look up the same row from any known key.
+Keyed by DOI, OpenAlex id, arXiv id, ISBN-10/13, and exact title
+(last-resort). Writes store the full serialised `Publication` as a
+JSON blob in the `payload_json` column so schema evolution on the
+Python side doesn't require a schema migration. The structured id
+columns are there so we can look up the same row from any known key.
+
+Cache writes are **overwrite, not merge** — `upsert(record)` replaces
+the existing row for that citation key wholesale, by design. The
+resolver's enrichment chain runs to completion before each upsert,
+so the new record reflects the best information available at write
+time. Across invocations, an upsert can therefore *downgrade* a
+previously-richer row if the new resolution path finds less; callers
+that care about strictly additive enrichment should run with the
+cache attached so the chain reads the prior row first.
 
 Raw SQL, no ORM. The schema lives as an explicit string in `_SCHEMA`
 and is versioned via the `meta` table (`schema_version`).
@@ -13,6 +22,7 @@ and is versioned via the `meta` table (`schema_version`).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import asdict, fields
 from datetime import UTC, datetime
@@ -20,6 +30,10 @@ from pathlib import Path
 
 from quelle.models.publication import Author, Publication
 from quelle.repositories.errors import CacheError
+
+_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
+_ARXIV_RE = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+/\d{7}(v\d+)?)$", re.IGNORECASE)
+_ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
 
 SCHEMA_VERSION = 2
 
@@ -58,6 +72,7 @@ class Cache:
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._conn = connection
+        self._db_path: Path | None = None
 
     @classmethod
     def open(cls, db_path: Path) -> Cache:
@@ -79,7 +94,9 @@ class Cache:
             connection.commit()
         except sqlite3.Error as exc:
             raise CacheError(f"failed to open cache at {db_path}: {exc}") from exc
-        return cls(connection)
+        instance = cls(connection)
+        instance._db_path = db_path
+        return instance
 
     def close(self) -> None:
         self._conn.close()
@@ -121,6 +138,52 @@ class Cache:
             (_title_key(title),),
         )
 
+    def lookup(
+        self,
+        query: str,
+        *,
+        type_hint: str | None = None,
+        author: str | None = None,
+    ) -> Publication | None:
+        """Try every cache lookup route for a user-supplied query string.
+
+        Identifier-based lookups (DOI / ISBN / arXiv id / OpenAlex id)
+        are always honoured — those are unambiguous. The exact-title
+        fallback is skipped when `type_hint` or `author` is set, since
+        a cached entry keyed by the exact title may have been resolved
+        without that hint and would short-circuit the explicit
+        disambiguation.
+        """
+        stripped = query.strip()
+
+        isbn = _extract_isbn(stripped)
+        if isbn:
+            hit = self.get_by_isbn(isbn)
+            if hit is not None:
+                return hit
+
+        doi = _extract_doi(stripped)
+        if doi:
+            hit = self.get_by_doi(doi)
+            if hit is not None:
+                return hit
+
+        if _ARXIV_RE.match(stripped):
+            hit = self.get_by_arxiv_id(_strip_arxiv_version(stripped))
+            if hit is not None:
+                return hit
+
+        if stripped.startswith("https://openalex.org/") or stripped.startswith("openalex:"):
+            hit = self.get_by_openalex_id(
+                stripped.removeprefix("openalex:") if stripped.startswith("openalex:") else stripped
+            )
+            if hit is not None:
+                return hit
+
+        if type_hint is not None or author is not None:
+            return None
+        return self.get_by_title_exact(stripped)
+
     def upsert(self, publication: Publication) -> None:
         """Insert or replace the row for `publication.citation_key()`."""
         payload = json.dumps(_publication_to_dict(publication), ensure_ascii=False)
@@ -158,14 +221,25 @@ class Cache:
             raise CacheError(f"failed to upsert publication: {exc}") from exc
 
     def stats(self) -> dict[str, object]:
-        """Return a small payload with the total count and newest entry."""
+        """Return a small payload describing the cache: count + age + size."""
         cursor = self._conn.execute(
-            "SELECT COUNT(*) AS total, MAX(cached_at) AS newest FROM publications"
+            "SELECT COUNT(*) AS total, "
+            "MAX(cached_at) AS newest, "
+            "MIN(cached_at) AS oldest "
+            "FROM publications"
         )
         row = cursor.fetchone()
+        size_bytes: int | None = None
+        if self._db_path is not None and self._db_path.exists():
+            try:
+                size_bytes = self._db_path.stat().st_size
+            except OSError:
+                size_bytes = None
         return {
             "total": row["total"] if row else 0,
             "newest_cached_at": row["newest"] if row else None,
+            "oldest_cached_at": row["oldest"] if row else None,
+            "size_bytes": size_bytes,
             "schema_version": SCHEMA_VERSION,
         }
 
@@ -243,3 +317,42 @@ def _publication_from_payload(payload_json: str) -> Publication:
 def _title_key(title: str) -> str:
     """Lowercased, whitespace-collapsed title for title_key column."""
     return " ".join((title or "").split()).lower()
+
+
+def _extract_doi(query: str) -> str | None:
+    """Pull a bare DOI out of a DOI URL or raw query if one is present."""
+    lowered = query.lower()
+    lowered = lowered.removeprefix("https://doi.org/")
+    lowered = lowered.removeprefix("http://doi.org/")
+    lowered = lowered.removeprefix("doi:")
+    if _DOI_RE.match(lowered):
+        return lowered
+    return None
+
+
+def _extract_isbn(query: str) -> str | None:
+    """Pull a bare ISBN out of `ISBN: ...`, hyphenated, or plain digit strings."""
+    raw = query.strip().lower()
+    raw = raw.removeprefix("isbn:")
+    raw = raw.removeprefix("isbn ")
+    digits = "".join(ch for ch in raw if ch.isdigit() or ch in "xX").upper()
+    if not digits:
+        return None
+    if _ISBN_DIGITS_RE.match(digits):
+        return digits
+    return None
+
+
+def _strip_arxiv_version(arxiv_id: str) -> str:
+    """Drop the `vN` suffix if present. `1706.03762v5` -> `1706.03762`.
+
+    Local copy of `arxiv._strip_version` so the cache module does not
+    import from the source-adapter layer (services / cache live in the
+    same tier; sources are higher up the dependency graph).
+    """
+    cleaned = arxiv_id.strip().lower()
+    if "v" in cleaned:
+        head, sep, tail = cleaned.rpartition("v")
+        if sep and tail.isdigit():
+            return head
+    return cleaned

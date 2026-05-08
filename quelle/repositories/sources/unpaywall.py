@@ -4,10 +4,17 @@ Free API, requires an email address as a query parameter (which is
 also used as the identifier for reporting abuse). 100k requests /
 day, 100 ms recommended between requests. Docs:
 https://unpaywall.org/products/api/v2
+
+The 100 ms inter-call interval is enforced via a module-level lock
+(`_LAST_CALL_AT`) so a script that fetches many DOIs in a tight loop
+stays inside the recommended budget without each caller having to
+sleep manually. Modeled on `arxiv.py`'s rate-limit pattern.
 """
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import httpx
@@ -17,6 +24,21 @@ from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
 API_URL = "https://api.unpaywall.org/v2/{doi}"
+
+_MIN_INTERVAL_SECONDS = 0.1
+_LAST_CALL_AT = 0.0
+_RATE_LOCK = threading.Lock()
+
+
+def _rate_limit() -> None:
+    """Sleep just long enough to respect Unpaywall's 100 ms cadence."""
+    global _LAST_CALL_AT
+    with _RATE_LOCK:
+        now = time.monotonic()
+        elapsed = now - _LAST_CALL_AT
+        if elapsed < _MIN_INTERVAL_SECONDS:
+            time.sleep(_MIN_INTERVAL_SECONDS - elapsed)
+        _LAST_CALL_AT = time.monotonic()
 
 
 def lookup_by_doi(client: httpx.Client, settings: Settings, doi: str) -> dict[str, Any]:
@@ -31,10 +53,18 @@ def lookup_by_doi(client: httpx.Client, settings: Settings, doi: str) -> dict[st
             "Unpaywall requires an email — set UNPAYWALL_EMAIL or QUELLE_CONTACT_EMAIL"
         )
     url = API_URL.format(doi=doi)
+    _rate_limit()
     try:
         return get_json(client, url, params={"email": email})
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _reset_rate_limit_for_tests() -> None:
+    """Test hook — clears the last-call timestamp so tests don't pay 100 ms."""
+    global _LAST_CALL_AT
+    with _RATE_LOCK:
+        _LAST_CALL_AT = 0.0
 
 
 def extract_pdf_url(payload: dict[str, Any]) -> str | None:

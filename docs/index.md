@@ -1,13 +1,13 @@
 ---
 title: quelle — open-source academic metadata CLI
-description: Local CLI that fetches academic publication metadata and PDFs from OpenAlex, Crossref, Semantic Scholar, arXiv, and Unpaywall — as normalised JSON.
+description: Local CLI that fetches academic publication and book metadata + PDFs from OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, and BnF — as normalised JSON.
 ---
 
 # quelle
 
 <p class="tagline">Cite your sources.</p>
 
-Local CLI that fetches academic publication metadata and PDFs from free, open academic sources — [OpenAlex](https://docs.openalex.org/), [Crossref](https://www.crossref.org/), [Semantic Scholar](https://api.semanticscholar.org/), [arXiv](https://info.arxiv.org/help/api/), and [Unpaywall](https://unpaywall.org/) — and returns them as normalised JSON. A composable building block: pipe the output into any notes system, reference manager, or research workflow.
+Local CLI that fetches academic publication and book metadata and PDFs from free, open sources — [OpenAlex](https://docs.openalex.org/), [Crossref](https://www.crossref.org/), [Semantic Scholar](https://api.semanticscholar.org/), [arXiv](https://info.arxiv.org/help/api/), [Unpaywall](https://unpaywall.org/), [Open Library](https://openlibrary.org/), [Google Books](https://developers.google.com/books/), and [BnF](https://api.bnf.fr/) — and returns them as normalised JSON. Handles both academic articles (DOI / arXiv id / title) and books (ISBN / title). A composable building block: pipe the output into any notes system, reference manager, or research workflow.
 
 The name is German for *source* — in academic German, "Quelle:" is the word that introduces a bibliographic reference.
 
@@ -52,11 +52,11 @@ $ quelle --json fetch 1706.03762 | jq '.title, .authors[].name, .year'
 
 ## What it does
 
-- **Fallback chain over open sources.** OpenAlex is primary; Crossref enriches the DOI-authoritative fields; Semantic Scholar fills citation graph gaps; arXiv covers preprints; Unpaywall resolves DOIs to open-access PDF URLs. Fetches merge cleanly — the CLI normalises the shape regardless of which source answered.
-- **Three lookup keys.** DOI, arXiv id, or free-text title. If you only have a Google Scholar link, paste the paper title instead — Scholar has no API and its ToS prohibits scraping.
+- **Fallback chains over open sources.** Articles walk OpenAlex → Crossref → Semantic Scholar (with arXiv covering preprints and Unpaywall resolving DOIs to open-access PDF URLs). Books walk Open Library → Google Books → BnF → OpenAlex. Fetches merge cleanly — the CLI normalises the shape regardless of which source answered.
+- **Four lookup keys.** DOI, arXiv id, ISBN-10/13, or free-text title. Pass `--book` / `--article` to bias an ambiguous title query. If you only have a Google Scholar link, paste the paper title instead — Scholar has no API and its ToS prohibits scraping.
 - **SQLite cache.** Keyed by DOI, arXiv id, OpenAlex id, ISBN-10/13, and normalised title — the second query for the same paper is offline. `quelle cache list` / `show` / `clear` inspect and manage it.
-- **PDF download chain.** `--download-pdf` tries OpenAlex → arXiv → Unpaywall in order, with content-type and size validation. arXiv's 1-req-per-3s rate limit is enforced globally via a module-level lock so parallel calls stay polite.
-- **Scriptable.** All commands take `--json`, exit codes map to an error hierarchy (1 user error, 2 source error, 3 network, 4 internal), and the whole thing is designed to pipe into notes workflows or reference managers.
+- **PDF download chain.** `--download-pdf` tries OpenAlex → arXiv → Unpaywall in order, with content-type and size validation. arXiv's 1-req-per-3s rate limit and Unpaywall's 100 ms inter-call interval are enforced globally via module-level locks so parallel calls stay polite.
+- **Scriptable.** All commands take `--json`, exit codes map to an error hierarchy (1 user/not-found, 2 network, 3 cache, 4 config), and the whole thing is designed to pipe into notes workflows or reference managers.
 
 ## Why quelle
 

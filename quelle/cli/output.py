@@ -20,7 +20,7 @@ from rich.table import Table
 _console = Console()
 
 
-@dataclass
+@dataclass(frozen=True)
 class OutputMode:
     """Whether the caller wants JSON, a rich TTY render, or plain text."""
 
@@ -31,11 +31,32 @@ class OutputMode:
     def detect(cls, json_flag: bool) -> OutputMode:
         return cls(json=json_flag, tty=sys.stdout.isatty() and not json_flag)
 
+    @classmethod
+    def from_ctx(cls, ctx: Any) -> OutputMode:
+        """Resolve the output mode from a Typer context's stashed `--json` flag."""
+        json_flag = bool(getattr(ctx, "obj", None) and ctx.obj.get("json"))
+        return cls.detect(json_flag)
+
 
 def emit_json(payload: Any) -> None:
     """Write a JSON payload to stdout with a trailing newline."""
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
     sys.stdout.write("\n")
+
+
+def _format_bytes(value: Any) -> str:
+    """Render a byte count as a short human label (KB / MB / GB)."""
+    if not isinstance(value, int) or value < 0:
+        return "?"
+    if value < 1024:
+        return f"{value} B"
+    units = ("KB", "MB", "GB", "TB")
+    size = float(value) / 1024
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} {units[-1]}"
 
 
 def render_publication(payload: dict[str, Any], *, mode: OutputMode) -> None:
@@ -172,8 +193,8 @@ def render_search(payload: dict[str, Any], *, mode: OutputMode) -> None:
 def render_cache_list(payload: dict[str, Any], *, mode: OutputMode) -> None:
     """Render a list of cache entries with a header summary.
 
-    The header carries the total row count, schema version, and last
-    upsert timestamp — what `cache stats` used to print on its own.
+    The header carries the total row count, schema version, last
+    upsert timestamp, oldest entry, and on-disk size in human form.
     """
     if mode.json:
         emit_json(payload)
@@ -181,10 +202,18 @@ def render_cache_list(payload: dict[str, Any], *, mode: OutputMode) -> None:
     entries = payload.get("entries") or []
     total = payload.get("total", 0)
     newest = (payload.get("newest_cached_at") or "")[:19] or "(empty)"
+    oldest = (payload.get("oldest_cached_at") or "")[:19] or "(empty)"
     schema = payload.get("schema_version", "?")
+    size_label = _format_bytes(payload.get("size_bytes"))
+    header_parts = [
+        f"last upsert {newest}",
+        f"oldest {oldest}",
+        f"size {size_label}",
+        f"schema v{schema}",
+    ]
     _console.print(
         f"[bold]cache:[/bold] {total} entr{'y' if total == 1 else 'ies'}  "
-        f"[dim]· last upsert {newest} · schema v{schema}[/dim]"
+        f"[dim]· {' · '.join(header_parts)}[/dim]"
     )
     if not entries:
         return

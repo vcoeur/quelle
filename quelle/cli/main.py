@@ -25,6 +25,7 @@ from quelle.cli._helpers import (
     looks_like_explicit_id,
     publication_to_dict,
     report_error,
+    resolve_type_hint,
     split_author_from_query,
 )
 from quelle.cli.config import config_app
@@ -44,6 +45,7 @@ from quelle.repositories.errors import (
 from quelle.repositories.http_client import build_client
 from quelle.services import search as search_service
 from quelle.services.resolver import resolve_with_enrichment
+from quelle.services.search import SearchType
 from quelle.settings import Settings, load_settings
 
 app = typer.Typer(
@@ -55,6 +57,20 @@ app = typer.Typer(
 cache_app = typer.Typer(help="Inspect the local SQLite cache.", no_args_is_help=True)
 app.add_typer(cache_app, name="cache")
 app.add_typer(config_app, name="config")
+
+# Documented hard ceiling on `--limit`. Each upstream caps `per-page` lower
+# than this (Google Books at 40, Semantic Scholar at 100, OpenAlex at 200);
+# `services/search.py` clips per-source pulls accordingly. Returning more
+# than 50 merged hits to a human in one go is rarely useful anyway.
+MAX_LIMIT = 50
+
+# Map the (--book, --article) flag pair to the search service's typed
+# Literal so we don't smuggle a plain `str` through `# type: ignore`.
+_TYPE_TO_LITERAL: dict[str | None, SearchType] = {
+    None: "all",
+    "book": "book",
+    "article": "article",
+}
 
 
 @app.callback(invoke_without_command=True)
@@ -87,30 +103,17 @@ def _root(
     ctx.obj["json"] = json_output
 
 
-def _mode(ctx: typer.Context) -> OutputMode:
-    """Resolve the output mode from the root `--json` flag."""
-    json_flag = bool(ctx.obj and ctx.obj.get("json"))
-    return OutputMode.detect(json_flag)
-
-
 def _load() -> Settings:
     return load_settings()
 
 
-def _resolve_type_hint(book: bool, article: bool) -> str | None:
-    """Translate the mutually-exclusive `--book` / `--article` flags into a hint.
-
-    Both absent → `None` (query every source). Both present is a user error;
-    fail fast before touching settings or the network.
-    """
-    if book and article:
-        report_error(UserError("--book and --article are mutually exclusive"))
-        raise typer.Exit(1)
-    if book:
-        return "book"
-    if article:
-        return "article"
-    return None
+def _type_hint_or_exit(book: bool, article: bool) -> str | None:
+    """Wrap `resolve_type_hint` with the Typer-side error reporting."""
+    try:
+        return resolve_type_hint(book, article)
+    except UserError as exc:
+        report_error(exc)
+        raise typer.Exit(1) from exc
 
 
 @app.command()
@@ -134,44 +137,91 @@ def fetch(
         help="Also download the OA PDF when available.",
     ),
 ) -> None:
-    """Resolve a publication from open sources and print its metadata."""
-    type_hint = _resolve_type_hint(book, article)
+    """Resolve a publication from open sources and print its metadata.
+
+    `--book` / `--article` only steer free-text resolution. When the
+    query is an explicit DOI / ISBN / arXiv id the flag is ignored —
+    we now reject the combination instead of silently throwing it
+    away, so the user knows to drop the flag (or pass a free-text
+    title query).
+    """
+    type_hint = _type_hint_or_exit(book, article)
+
+    explicit = looks_like_explicit_id(query)
+    if explicit and type_hint is not None:
+        report_error(
+            UserError(
+                f"--{type_hint} is for free-text queries; the explicit "
+                f"identifier {query!r} resolves directly. Drop the flag, "
+                "or pass the title as free text."
+            )
+        )
+        raise typer.Exit(1)
 
     effective_query = query
     effective_author: str | None = None
-    if not looks_like_explicit_id(query):
+    if not explicit:
         effective_query, effective_author = split_author_from_query(query)
 
     settings = _load()
-    cache_handle: Cache | None = None
     try:
         with build_client(settings) as client:
-            cache_handle = None if no_cache else Cache.open(settings.paths.cache_db)
-            publication = resolve_with_enrichment(
-                client,
-                settings,
-                effective_query,
-                cache=cache_handle,
-                type_hint=type_hint,
-                author=effective_author,
-            )
-            if download_pdf:
-                from quelle.services.pdf_resolver import resolve_and_download
-
-                outcome = resolve_and_download(
-                    client, settings, publication, settings.paths.pdf_dir
+            cache_handle: Cache | None = None
+            if no_cache:
+                publication = _fetch_with_cache(
+                    client,
+                    settings,
+                    effective_query,
+                    cache_handle=None,
+                    type_hint=type_hint,
+                    author=effective_author,
+                    download_pdf=download_pdf,
                 )
-                if outcome.local_path is not None:
-                    publication = replace(publication, local_pdf_path=str(outcome.local_path))
-                    if cache_handle is not None:
-                        cache_handle.upsert(publication)
+            else:
+                with Cache.open(settings.paths.cache_db) as cache_handle:
+                    publication = _fetch_with_cache(
+                        client,
+                        settings,
+                        effective_query,
+                        cache_handle=cache_handle,
+                        type_hint=type_hint,
+                        author=effective_author,
+                        download_pdf=download_pdf,
+                    )
     except PublicationsError as exc:
         report_error(exc)
         raise typer.Exit(exit_code_for(exc)) from exc
-    finally:
-        if cache_handle is not None:
-            cache_handle.close()
-    render_publication(publication_to_dict(publication), mode=_mode(ctx))
+    render_publication(publication_to_dict(publication), mode=OutputMode.from_ctx(ctx))
+
+
+def _fetch_with_cache(
+    client,
+    settings: Settings,
+    query: str,
+    *,
+    cache_handle: Cache | None,
+    type_hint: str | None,
+    author: str | None,
+    download_pdf: bool,
+):
+    """Resolve, optionally download the PDF, persist back to the cache."""
+    publication = resolve_with_enrichment(
+        client,
+        settings,
+        query,
+        cache=cache_handle,
+        type_hint=type_hint,
+        author=author,
+    )
+    if download_pdf:
+        from quelle.services.pdf_resolver import resolve_and_download
+
+        outcome = resolve_and_download(client, settings, publication, settings.paths.pdf_dir)
+        if outcome.local_path is not None:
+            publication = replace(publication, local_pdf_path=str(outcome.local_path))
+            if cache_handle is not None:
+                cache_handle.upsert(publication)
+    return publication
 
 
 @app.command()
@@ -183,7 +233,13 @@ def search(
     ),
     book: bool = typer.Option(False, "--book", help="Restrict to book sources."),
     article: bool = typer.Option(False, "--article", help="Restrict to article sources."),
-    limit: int = typer.Option(3, "--limit", help="Number of merged hits to return."),
+    limit: int = typer.Option(
+        3,
+        "--limit",
+        min=1,
+        max=MAX_LIMIT,
+        help=f"Number of merged hits to return (1-{MAX_LIMIT}).",
+    ),
     source: list[str] = typer.Option(
         None, "--source", help="Repeatable. Restrict to named sources."
     ),
@@ -194,8 +250,8 @@ def search(
     deduplicated by DOI / ISBN / arXiv id. Each line ends with an
     `id:` value that can be passed to `quelle fetch`.
     """
-    type_hint = _resolve_type_hint(book, article)
-    result_type = type_hint or "all"
+    type_hint = _type_hint_or_exit(book, article)
+    result_type = _TYPE_TO_LITERAL[type_hint]
 
     effective_query, effective_author = split_author_from_query(query)
 
@@ -207,7 +263,7 @@ def search(
                 settings,
                 effective_query,
                 author=effective_author,
-                type=result_type,  # type: ignore[arg-type]
+                type=result_type,
                 sources=source or None,
                 limit=limit,
             )
@@ -222,13 +278,13 @@ def search(
         "limit": limit,
         "hits": [hit_to_dict(rank, hit) for rank, hit in enumerate(hits, start=1)],
     }
-    render_search(payload, mode=_mode(ctx))
+    render_search(payload, mode=OutputMode.from_ctx(ctx))
 
 
 @cache_app.command("list")
 def cache_list(
     ctx: typer.Context,
-    limit: int = typer.Option(50, "--limit", help="Max rows to list."),
+    limit: int = typer.Option(50, "--limit", min=1, help="Max rows to list."),
 ) -> None:
     """List the most recently cached publications, with a header summary.
 
@@ -245,7 +301,7 @@ def cache_list(
         "cache_db": str(settings.paths.cache_db),
         "entries": entries,
     }
-    render_cache_list(payload, mode=_mode(ctx))
+    render_cache_list(payload, mode=OutputMode.from_ctx(ctx))
 
 
 @cache_app.command("clear")
@@ -260,7 +316,7 @@ def cache_clear(
     settings = _load()
     with Cache.open(settings.paths.cache_db) as cache:
         removed = cache.clear()
-    render_config({"cleared_rows": removed}, mode=_mode(ctx))
+    render_config({"cleared_rows": removed}, mode=OutputMode.from_ctx(ctx))
 
 
 @cache_app.command("show")
@@ -269,15 +325,13 @@ def cache_show(
     query: str = typer.Argument(..., help="DOI, arXiv id, ISBN, or title to look up."),
 ) -> None:
     """Look up a publication in the cache without hitting the network."""
-    from quelle.services.resolver import lookup_in_cache
-
     settings = _load()
     with Cache.open(settings.paths.cache_db) as cache:
-        hit = lookup_in_cache(cache, query)
+        hit = cache.lookup(query)
     if hit is None:
         report_error(NotFoundError(f"no cached entry for: {query!r}"))
         raise typer.Exit(1)
-    render_publication(publication_to_dict(hit), mode=_mode(ctx))
+    render_publication(publication_to_dict(hit), mode=OutputMode.from_ctx(ctx))
 
 
 if __name__ == "__main__":

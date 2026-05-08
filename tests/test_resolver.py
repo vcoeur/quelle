@@ -165,7 +165,12 @@ def test_resolve_with_type_hint_delegates_to_search(
                 year=2022,
                 type="book",
                 isbn_13="9781839761232",
-                sources=["open_library", "bnf"],
+                # Single source → not self-sufficient under the
+                # `_hit_is_self_sufficient` predicate, so the resolver
+                # still recurses by ISBN through the book chain. See
+                # `test_resolve_top_hit_skips_roundtrip_when_corroborated`
+                # below for the corroborated-hit short-circuit.
+                sources=["open_library"],
             )
         ]
 

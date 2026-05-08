@@ -157,7 +157,7 @@ Layer rules: imports only go downward. Models import nothing from this project. 
 
 ## Status
 
-All eight open-API sources wired up with a merge-logic enrichment chain. Article identifiers (DOI / arXiv id / title) walk OpenAlex → Crossref → Semantic Scholar; book identifiers (ISBN-10 / ISBN-13) walk Open Library → Google Books → OpenAlex → BnF. SQLite cache keyed by DOI / arXiv id / OpenAlex id / ISBN-10 / ISBN-13 / title — the second query for the same record is offline. PDF download chain (OpenAlex → arXiv → Unpaywall) only fires for articles and OA / public-domain books; in-copyright books are intentionally skipped even with `--download-pdf` set.
+All eight open-API sources wired up with a merge-logic enrichment chain. Article identifiers (DOI / arXiv id / title) walk OpenAlex → Crossref → Semantic Scholar; book identifiers (ISBN-10 / ISBN-13) walk Open Library → Google Books → BnF → OpenAlex. SQLite cache keyed by DOI / arXiv id / OpenAlex id / ISBN-10 / ISBN-13 / title — the second query for the same record is offline. PDF download chain (OpenAlex → arXiv → Unpaywall) only fires for articles and OA / public-domain books; in-copyright books are intentionally skipped even with `--download-pdf` set.
 
 ## Usage and terms
 

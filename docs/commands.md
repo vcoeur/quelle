@@ -16,7 +16,7 @@ Claude skills and shell pipelines should always pass `--json`. The first invocat
 
 ## `quelle fetch`
 
-Resolve a publication by DOI, arXiv id, ISBN-10/13, or free-text title. Walks the source fallback chain (OpenAlex → Crossref enrichment → Semantic Scholar → arXiv → Unpaywall for articles; Open Library → Google Books → OpenAlex → BnF for books) and returns a normalised JSON `Publication`.
+Resolve a publication by DOI, arXiv id, ISBN-10/13, or free-text title. Walks the source fallback chain (OpenAlex → Crossref enrichment → Semantic Scholar → arXiv → Unpaywall for articles; Open Library → Google Books → BnF → OpenAlex for books) and returns a normalised JSON `Publication`.
 
 ```bash
 # DOI — OpenAlex primary, Crossref enrichment.
@@ -128,6 +128,24 @@ quelle config edit
 quelle --version
 ```
 
+## Behaviour
+
+A handful of behaviours are global to the tool — surfaced here so you don't have to read the source to know about them.
+
+**`--limit` ceilings.** `quelle search --limit N` is enforced at parse time to be `1 ≤ N ≤ 50`. Values outside that range fail before any network call. Each upstream source is then asked for `max(N * 2, 20)` candidates per request, clipped to that source's documented per-page cap (Google Books 40, Semantic Scholar 100, Open Library 100, BnF 100, OpenAlex 200, arXiv 200) so RRF has material to merge after dedup without exceeding any upstream's limit.
+
+**Per-source rate limits enforced in-process.** A single `quelle` process serialises calls to the rate-limited sources via module-level locks:
+
+- arXiv — 1 request per 3 s (per arXiv's published guidance).
+- Unpaywall — 1 request per 100 ms.
+- Google Books — 1 request per ~100 ms (~10 req/s baseline; the daily 1k cap on the unauthenticated tier is the binding limit in practice).
+
+The locks are global to the process, so a parallel `search` call that fans out to six sources still pays the per-source cadence on the limited ones. Across processes (e.g. a shell loop calling `quelle fetch` repeatedly) every invocation re-establishes its own locks — keep your loops gentle.
+
+**Cache size is unbounded.** The local SQLite cache has no TTL, no row-count cap, and no eviction. `cache list` surfaces total / oldest / newest / on-disk size in its header so you can decide when to `cache clear --yes`. There is no built-in `cache prune`.
+
+**Connection pooling within one invocation.** A single `httpx.Client` is constructed per CLI run and reused for every source call, so connections are pooled within the run. Across runs every invocation re-establishes TLS — fine for single lookups, slow for tight shell loops.
+
 ## Exit codes
 
 `quelle` maps errors to four exit codes:
@@ -135,7 +153,7 @@ quelle --version
 | Code | Meaning |
 |---|---|
 | `0` | Success |
-| `1` | User error (bad identifier, unsupported input, missing required env var) |
-| `2` | Source error (upstream returned an error response, paper not found) |
-| `3` | Network error (timeout, DNS failure, TLS) |
-| `4` | Internal error (bug) |
+| `1` | User error or paper not found (bad identifier, unsupported input) |
+| `2` | Network error (timeout, DNS failure, TLS, upstream rate-limit) |
+| `3` | Local cache error (corrupt SQLite file, schema-migration failure) |
+| `4` | Configuration error (missing email, malformed `.env`) |
