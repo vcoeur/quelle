@@ -326,7 +326,6 @@ wheels = [
 
 [[package]]
 name = "quelle"
-version = "0.8.1"
 source = { editable = "." }
 dependencies = [
     { name = "environs" },
