@@ -1,6 +1,6 @@
 [project]
 name = "quelle"
-version = "0.8.1"
+dynamic = ["version"]
 description = "Fetch publication and book metadata + PDFs from open sources (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and return normalised JSON"
 readme = "README.md"
 license = { text = "MIT" }
@@ -35,8 +35,12 @@ Issues = "https://github.com/vcoeur/quelle/issues"
 quelle = "quelle.cli.main:app"
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Version is derived from the git tag (vX.Y.Z) at build time — never committed.
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["quelle"]
