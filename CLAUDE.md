@@ -24,8 +24,10 @@ Strict layers — imports only go downward.
 quelle/
   models/        <- Publication, Author (pure dataclasses, no I/O)
   repositories/  <- http_client, errors, sources/{openalex, crossref, ...}
-  services/      <- resolver (orchestrates which source to hit first)
-  cli/           <- Typer app + config sub-app + rich/JSON output helpers
+  services/      <- resolver (resolve_any routing + enrichment), url_resolver
+                    (web/media via Open Graph), pdf_resolver (download + local
+                    metadata), citekey (the CiteKey convention), schema
+  cli/           <- Typer app + config/skill sub-apps + rich/JSON output helpers
   paths.py       <- platformdirs resolution (config / data / cache)
   migrate.py     <- One-shot migration from the legacy config/cache layout
   settings.py    <- environs config (uses paths.resolve internally)
@@ -99,15 +101,24 @@ make tool-install  # install `quelle` globally via `uv tool install`
 ## CLI surface
 
 ```
-quelle [--version | --json] {fetch | search | cache | config}
+quelle [--version | --json] {resolve | fetch | search | schema | skill | cache | config}
 ```
 
-- `quelle fetch <id-or-title>` — resolve a single publication.
+- `quelle resolve <anything>` — **universal entry**: a local `.pdf` path, an http(s) URL (web page / video → `web` / `media`), a DOI / ISBN / arXiv id, or free text. Always returns a *Source* (the `Publication` dict + an `x_vcoeur` block) and mints a vault-ready CiteKey against an injected taken-set. `--csl` exports CSL-JSON instead.
+- `quelle fetch <id-or-title>` — resolve a single academic / book publication (no CiteKey minting).
 - `quelle search <query>` — list candidate hits across every wired source.
+- `quelle schema` — dump the machine-readable CLI contract (commands, flags, Source fields, `x_vcoeur`, CiteKey rules, kind map, exit codes). The authoritative, never-drifting contract.
+- `quelle skill {install,status}` — install the bundled agent skill (`quelle/skill/SKILL.md`, shipped as package data).
 - `quelle cache {list,show,clear}` — inspect or wipe the SQLite cache.
 - `quelle config` — show effective config (bare invocation); `quelle config edit` opens the `.env` in `$VISUAL` / `$EDITOR`.
 
 `--json` is a top-level flag — place it **before** the subcommand (`quelle --json fetch …`). There is no `quelle init`: first invocation creates the dirs via `load_settings()`, and `quelle config edit` seeds the `.env` template on first run.
+
+### The CiteKey convention + Source shape
+
+`quelle/services/citekey.py` is the **single owner** of the CiteKey naming convention. `base_key(pub)` derives an un-disambiguated key (authored → BibTeX rule; `web` → `SiteNameYYYY[-ref]`; `media` → `ChannelYYYY[-id]`; authorless-other → CamelTitle+year; last-resort → `DomainAccessDate`). `mint(base, taken)` appends a lowercase suffix (`a`, `b`, …) until free against the injected taken-set — quelle never reads the vault itself. `vault_kind(kind)` maps quelle kinds to knoten vault kinds (`article`/`preprint`→`article`, `book`/`book-chapter`→`book`, `web`→`web`, `media`→`media`, else `document`).
+
+The Source emitted by `resolve` is `asdict(publication)` (snake_case) + `citation_key` (BibTeX base) + a top-level `x_vcoeur` = `{citekey, vault_id: null, vault_kind, confidence: null}`, where `x_vcoeur.citekey` is the minted, collision-resolved key. knoten's `reference --from-source` consumes this exact object. The taken-set is loaded from `--taken` (comma list) and `--taken-file` (newline list, or `knoten citekeys --json`, or `-` for stdin).
 
 ## Workflow
 

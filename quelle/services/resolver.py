@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 
@@ -43,6 +44,11 @@ _DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
 _ARXIV_RE = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+/\d{7}(v\d+)?)$", re.IGNORECASE)
 _SCHOLAR_HOST_RE = re.compile(r"scholar\.google\.\w+", re.IGNORECASE)
 _ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
+
+# Identifiers embedded anywhere in a URL — used to route a landing page
+# (a DOI resolver link, an arXiv abs/pdf page) back to the rich resolver.
+_DOI_IN_URL_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
+_ARXIV_IN_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([^\s?#/]+?)(?:\.pdf)?/?$", re.IGNORECASE)
 
 
 # Single source of truth for the book-source priority chain. The
@@ -108,6 +114,85 @@ def resolve(
         return resolve_top_hit(client, settings, stripped, type_hint=type_hint, author=author)
 
     return openalex.search_by_title(client, settings, stripped)
+
+
+def resolve_any(
+    client: httpx.Client,
+    settings: Settings,
+    raw_input: str,
+    *,
+    cache: Cache | None = None,
+    type_hint: str | None = None,
+    author: str | None = None,
+) -> Publication:
+    """Universal entry: turn *any* input into a Publication.
+
+    Routes by input shape, in order:
+
+    1. an existing local `.pdf` path → the PDF resolver;
+    2. an http(s) URL → if it embeds a DOI / arXiv id, the rich
+       resolver; otherwise the generic URL (web/media) resolver;
+    3. an explicit DOI / ISBN / arXiv id, or free text → the existing
+       `resolve_with_enrichment` chain.
+
+    `type_hint` / `author` only steer the free-text path (same contract
+    as `resolve`). Always returns a Publication.
+    """
+    stripped = raw_input.strip()
+
+    if _looks_like_pdf_path(stripped):
+        from quelle.services.pdf_resolver import resolve_local_pdf
+
+        return resolve_local_pdf(Path(stripped))
+
+    if _is_http_url(stripped):
+        embedded = _embedded_identifier(stripped)
+        if embedded is not None:
+            return resolve_with_enrichment(client, settings, embedded, cache=cache)
+        from quelle.services.url_resolver import resolve_url
+
+        return resolve_url(client, settings, stripped)
+
+    return resolve_with_enrichment(
+        client,
+        settings,
+        stripped,
+        cache=cache,
+        type_hint=type_hint,
+        author=author,
+    )
+
+
+def _looks_like_pdf_path(value: str) -> bool:
+    """True when `value` is an existing local file ending in `.pdf`."""
+    if not value.lower().endswith(".pdf"):
+        return False
+    try:
+        return Path(value).is_file()
+    except OSError:
+        return False
+
+
+def _is_http_url(value: str) -> bool:
+    return value.lower().startswith(("http://", "https://"))
+
+
+def _embedded_identifier(url: str) -> str | None:
+    """Extract a DOI or arXiv id embedded in a URL, or None.
+
+    A `doi.org` landing page or any path-embedded DOI resolves to the
+    bare DOI; an `arxiv.org/abs|pdf/<id>` page resolves to the arXiv id.
+    """
+    doi = _extract_doi(url)
+    if doi:
+        return doi
+    match = _DOI_IN_URL_RE.search(url)
+    if match:
+        return match.group(0).rstrip("/")
+    arxiv_match = _ARXIV_IN_URL_RE.search(url)
+    if arxiv_match and _ARXIV_RE.match(arxiv_match.group(1)):
+        return arxiv_match.group(1)
+    return None
 
 
 def resolve_book_primary(client: httpx.Client, settings: Settings, isbn: str) -> Publication:

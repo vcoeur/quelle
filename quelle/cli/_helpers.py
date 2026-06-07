@@ -6,11 +6,13 @@ the helpers can be unit-tested without invoking the CLI runner.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from dataclasses import asdict
+from pathlib import Path
 
-from quelle.models.publication import Publication
+from quelle.models.publication import Author, Publication
 from quelle.models.search import MergedHit
 from quelle.repositories.errors import (
     CacheError,
@@ -20,6 +22,18 @@ from quelle.repositories.errors import (
     PublicationsError,
     UserError,
 )
+from quelle.services.citekey import base_key, vault_kind
+
+# quelle `kind` → CSL-JSON item type. Export-only; the canonical
+# convention rules live in `quelle.services.citekey`.
+_CSL_TYPE: dict[str, str] = {
+    "article": "article-journal",
+    "preprint": "article",
+    "book": "book",
+    "book-chapter": "chapter",
+    "web": "webpage",
+    "media": "motion_picture",
+}
 
 
 def resolve_type_hint(book: bool, article: bool) -> str | None:
@@ -84,11 +98,102 @@ def split_author_from_query(query: str) -> tuple[str, str | None]:
     return title, author
 
 
-def publication_to_dict(publication: Publication) -> dict:
-    """Flatten a Publication dataclass into a JSON-serialisable dict."""
+def publication_to_dict(publication: Publication, *, citekey: str | None = None) -> dict:
+    """Flatten a Publication into the canonical Source dict.
+
+    `citation_key` stays the BibTeX-style key (`Publication.citation_key()`).
+    A top-level `x_vcoeur` block carries the vault-ready CiteKey: `citekey`
+    is the minted (collision-resolved) key when one is passed, else the
+    un-disambiguated `base_key`. `vault_id` / `confidence` are placeholders
+    knoten fills on ingest; `vault_kind` is the quelle→knoten kind map.
+    """
     data = asdict(publication)
     data["citation_key"] = publication.citation_key()
+    data["x_vcoeur"] = {
+        "citekey": citekey or base_key(publication),
+        "vault_id": None,
+        "vault_kind": vault_kind(publication.kind),
+        "confidence": None,
+    }
     return data
+
+
+def publication_to_csl(publication: Publication, *, citekey: str | None = None) -> dict:
+    """Render a Publication as a single CSL-JSON item (export only).
+
+    `id` is the CiteKey (`citekey` override or `base_key`); `type` maps
+    the quelle kind to a CSL item type; authors become `[{family, given}]`;
+    the year becomes `issued.date-parts`. DOI / ISBN / URL / container are
+    included when present.
+    """
+    csl_type = _CSL_TYPE.get(publication.kind or "", "document")
+    entry: dict = {
+        "id": citekey or base_key(publication),
+        "type": csl_type,
+        "title": publication.title,
+    }
+    if publication.authors:
+        entry["author"] = [_csl_name(author) for author in publication.authors]
+    if publication.year:
+        entry["issued"] = {"date-parts": [[publication.year]]}
+    container = publication.venue or publication.publisher
+    if container:
+        entry["container-title"] = container
+    if publication.doi:
+        entry["DOI"] = publication.doi
+    isbn = publication.isbn_13 or publication.isbn_10
+    if isbn:
+        entry["ISBN"] = isbn
+    url = publication.source_url or publication.pdf_url
+    if url:
+        entry["URL"] = url
+    return entry
+
+
+def _csl_name(author: Author) -> dict:
+    """Split an author's display name into CSL `{family, given}`.
+
+    Last whitespace-separated token is the family name, the remainder the
+    given name. A single-token name yields just `family`.
+    """
+    tokens = author.name.split()
+    if not tokens:
+        return {"family": author.name}
+    if len(tokens) == 1:
+        return {"family": tokens[0]}
+    return {"family": tokens[-1], "given": " ".join(tokens[:-1])}
+
+
+def load_taken_set(taken_csv: str | None, taken_file: str | None) -> set[str]:
+    """Build the taken-CiteKey set from `--taken` and `--taken-file`.
+
+    `--taken` is a comma-separated list. `--taken-file` is a path (or `-`
+    for stdin) holding either newline-delimited CiteKeys or the JSON
+    object emitted by `knoten citekeys --json` (`{"citekeys": [...]}`,
+    detected by a leading `{`). The two sources are unioned.
+    """
+    taken: set[str] = set()
+    if taken_csv:
+        for key in taken_csv.split(","):
+            cleaned = key.strip()
+            if cleaned:
+                taken.add(cleaned)
+    if taken_file:
+        text = sys.stdin.read() if taken_file == "-" else Path(taken_file).read_text("utf-8")
+        taken |= _parse_taken_text(text)
+    return taken
+
+
+def _parse_taken_text(text: str) -> set[str]:
+    """Parse a taken-file body: JSON `{citekeys:[...]}` or one key per line."""
+    stripped = text.strip()
+    if not stripped:
+        return set()
+    if stripped.startswith("{"):
+        obj = json.loads(stripped)
+        keys = obj.get("citekeys", []) if isinstance(obj, dict) else []
+        return {str(key).strip() for key in keys if str(key).strip()}
+    return {line.strip() for line in stripped.splitlines() if line.strip()}
 
 
 def hit_to_dict(rank: int, hit: MergedHit) -> dict:

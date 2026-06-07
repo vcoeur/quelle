@@ -91,6 +91,25 @@ The only variable worth setting by default is `QUELLE_CONTACT_EMAIL` — it goes
 
 **Dev mode**: when you run `quelle` from a source checkout (`uv run quelle …` inside the repo), the `.env` at the repo root is still picked up — the same ergonomics as before — but downloaded PDFs and the cache go into a repo-local `.dev-state/` directory so your installed user data stays clean.
 
+## Universal `resolve` + CiteKey
+
+Beyond academic `fetch`, `quelle resolve` accepts **any** source — a DOI / ISBN / arXiv id, a free-text title, an http(s) URL (a web page or a video → a `web` / `media` record built from Open Graph metadata), or a local `.pdf` path — and always returns a normalised *Source*: the `Publication` dict plus a top-level `x_vcoeur` block carrying a **vault-ready CiteKey**.
+
+```bash
+quelle --json resolve https://bambulab.com/en/x1          # web page → web Source
+quelle --json resolve https://www.youtube.com/watch?v=ID  # video → media Source
+quelle --json resolve ./paper.pdf                         # local PDF → metadata + key
+quelle --json resolve "attention is all you need"         # free text → academic record
+```
+
+quelle owns the CiteKey naming convention but stays decoupled from any vault: you **inject** the set of keys already in use and it disambiguates against them (collision → lowercase suffix `a`, `b`, …):
+
+```bash
+knoten citekeys --json | quelle --json resolve "<input>" --taken-file -
+```
+
+`--csl` exports a CSL-JSON item instead of the Source. See [`docs/commands.md`](docs/commands.md) for the full `resolve` / `schema` / `skill` reference, and `quelle schema --json` for the authoritative, never-drifting machine contract.
+
 ## Usage
 
 ```bash
@@ -126,7 +145,16 @@ quelle cache clear --yes
 
 ## Claude Code skill
 
-A minimal example [`SKILL.md`](SKILL.md) ships at the repo root — drop it into `~/.claude/skills/quelle/` (or `<project>/.claude/skills/quelle/`) to use the CLI from a Claude Code session. It is deliberately thin: resolve the paper, print the metadata, stop. Adapt the last step for your own downstream workflow (Zettelkasten import, BibTeX append, etc.). The skill also includes a prominent reminder about each upstream's Terms of Service and rate limits — read it before running `quelle` at any non-trivial scale.
+quelle ships a **convention-free agent skill** as package data and installs it for you:
+
+```bash
+quelle skill install --user        # -> ~/.config/agents/skills/quelle/SKILL.md
+quelle skill install --project     # -> <cwd>/.agents/skills/quelle/SKILL.md
+quelle skill install --claude      # -> ~/.claude/skills/quelle/SKILL.md
+quelle skill status                # where it is installed + whether it matches the bundled copy
+```
+
+Because the skill is bundled with the wheel, it updates in lockstep with the CLI. It documents quelle's CLI contract — `resolve` / `fetch` / `search` / `schema`, the Source shape + `x_vcoeur`, CiteKey minting via `--taken-file`, the `--csl` export, and exit codes — and points readers to `quelle schema --json` as the authoritative contract. It deliberately encodes **no** vault conventions; layer those in a separate skill that references this one. (A minimal standalone example also ships at the repo root in [`SKILL.md`](SKILL.md).)
 
 ## Layout
 
@@ -157,7 +185,7 @@ Layer rules: imports only go downward. Models import nothing from this project. 
 
 ## Status
 
-All eight open-API sources wired up with a merge-logic enrichment chain. Article identifiers (DOI / arXiv id / title) walk OpenAlex → Crossref → Semantic Scholar; book identifiers (ISBN-10 / ISBN-13) walk Open Library → Google Books → BnF → OpenAlex. SQLite cache keyed by DOI / arXiv id / OpenAlex id / ISBN-10 / ISBN-13 / title — the second query for the same record is offline. PDF download chain (OpenAlex → arXiv → Unpaywall) only fires for articles and OA / public-domain books; in-copyright books are intentionally skipped even with `--download-pdf` set.
+All eight open-API sources wired up with a merge-logic enrichment chain. Article identifiers (DOI / arXiv id / title) walk OpenAlex → Crossref → Semantic Scholar; book identifiers (ISBN-10 / ISBN-13) walk Open Library → Google Books → BnF → OpenAlex. SQLite cache keyed by DOI / arXiv id / OpenAlex id / ISBN-10 / ISBN-13 / title — the second query for the same record is offline. PDF download chain (OpenAlex → arXiv → Unpaywall) only fires for articles and OA / public-domain books; in-copyright books are intentionally skipped even with `--download-pdf` set. `quelle resolve` extends this to **any** source — web pages, videos, and local PDFs — and mints a vault-ready CiteKey for each (the `web` / `media` kinds and the CiteKey convention live in `quelle/services/citekey.py`).
 
 ## Usage and terms
 

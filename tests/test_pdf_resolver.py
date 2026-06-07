@@ -1,13 +1,17 @@
-"""Tests for the PDF fallback chain."""
+"""Tests for the PDF fallback chain and local-PDF resolution."""
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import httpx
+import pytest
 
 from quelle.models.publication import Publication
-from quelle.services.pdf_resolver import resolve_and_download
+from quelle.repositories.errors import UserError
+from quelle.services.citekey import base_key
+from quelle.services.pdf_resolver import resolve_and_download, resolve_local_pdf
 
 
 def _publication_with_arxiv() -> Publication:
@@ -100,3 +104,35 @@ def test_total_failure_preserves_last_reason(tmp_path: Path, tmp_settings) -> No
 
     assert outcome.local_path is None
     assert "failed" in (outcome.reason_if_none or "")
+
+
+# --- resolve_local_pdf ----------------------------------------------------
+
+
+def test_resolve_local_pdf_reads_embedded_metadata(tmp_path: Path) -> None:
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(
+        b"%PDF-1.4\n1 0 obj<</Title (Deep Learning Survey) "
+        b"/CreationDate (D:20190512093000)>>endobj\n%%EOF"
+    )
+    pub = resolve_local_pdf(pdf)
+    assert pub.title == "Deep Learning Survey"
+    assert pub.year == 2019
+    assert pub.kind is None  # maps to the knoten `document` vault kind
+    assert pub.local_pdf_path == str(pdf)
+    assert base_key(pub) == "DeepLearningSurvey2019"
+
+
+def test_resolve_local_pdf_degrades_to_filename_and_mtime(tmp_path: Path) -> None:
+    pdf = tmp_path / "my-thesis-draft.pdf"
+    pdf.write_bytes(b"%PDF-1.4\nno info dict here\n%%EOF")
+    os.utime(pdf, (1577880000, 1577880000))  # 2020-01-01
+    pub = resolve_local_pdf(pdf)
+    assert pub.title == "my-thesis-draft"
+    assert pub.year == 2020
+    assert base_key(pub) == "MyThesisDraft2020"
+
+
+def test_resolve_local_pdf_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(UserError):
+        resolve_local_pdf(tmp_path / "nope.pdf")
