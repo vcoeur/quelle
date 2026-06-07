@@ -5,7 +5,7 @@ description: Full CLI reference for quelle — fetch, search, cache, config.
 
 # Commands
 
-The CLI surface is intentionally small: four subcommands (`fetch`, `search`, `cache`, `config`) plus a top-level `--version` flag. Every command takes its output mode from a single root flag, `--json`, that must appear **before** the subcommand:
+The CLI surface: `resolve`, `fetch`, `search`, `schema`, `skill`, `cache`, and `config`, plus a top-level `--version` flag. Every command takes its output mode from a single root flag, `--json`, that must appear **before** the subcommand:
 
 ```bash
 quelle --json fetch 10.1109/83.902291    # JSON
@@ -13,6 +13,67 @@ quelle fetch 10.1109/83.902291           # rich TTY rendering
 ```
 
 Claude skills and shell pipelines should always pass `--json`. The first invocation of any command creates the config / data / cache directories — there is no separate `init` step.
+
+## `quelle resolve`
+
+The **universal entry point**: resolve *anything* — a DOI / ISBN / arXiv id, a free-text title, an http(s) URL (web page or video), or a local `.pdf` path — into a normalised record *and* a vault-ready CiteKey. Unlike `fetch`, `resolve` always emits a **Source** (the `Publication` dict plus a top-level `x_vcoeur` block) and is the entry the rest of the citation ecosystem consumes.
+
+```bash
+# Academic id / free text — same rich resolution as `fetch`, plus a CiteKey.
+quelle --json resolve 10.1109/83.902291
+quelle --json resolve "attention is all you need"
+
+# Any web page → a `web` Source (title / site / date from Open Graph meta).
+quelle --json resolve https://bambulab.com/en/x1
+
+# A video / podcast host → a `media` Source.
+quelle --json resolve https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+# A local PDF → metadata from the file (degrades to the filename + mtime year).
+quelle --json resolve ./paper.pdf
+
+# A DOI / arXiv landing page is detected and routed to the rich resolver.
+quelle --json resolve https://doi.org/10.1109/83.902291
+```
+
+Routing order: existing local `.pdf` path → PDF resolver; http(s) URL with an embedded DOI / arXiv id → rich resolver, else the generic URL (web/media) resolver; explicit DOI / ISBN / arXiv id or free text → the regular enrichment chain.
+
+### The Source shape and `x_vcoeur`
+
+```json
+{
+  "title": "...", "authors": [...], "year": 2017, "doi": "...", "kind": "article",
+  "citation_key": "Vaswani2017",
+  "x_vcoeur": {"citekey": "Vaswani2017", "vault_id": null, "vault_kind": "article", "confidence": null}
+}
+```
+
+- `citation_key` — the BibTeX-style base key (always present).
+- `x_vcoeur.citekey` — the **vault-ready, collision-resolved** CiteKey (the minted key).
+- `x_vcoeur.vault_kind` — the quelle `kind` mapped to a knoten vault kind (`article`/`book`/`web`/`media`/`document`).
+- `vault_id` / `confidence` — `null` from quelle; a downstream consumer fills them.
+
+### Minting a vault-unique key (`--taken`, `--taken-file`)
+
+quelle stays decoupled from any vault: you **inject** the CiteKeys already in use and it disambiguates against them (collision → lowercase suffix `a`, `b`, …).
+
+```bash
+# Feed the taken-set from knoten so the minted key is unique in the vault.
+knoten citekeys --json | quelle --json resolve "<input>" --taken-file -
+quelle --json resolve "<input>" --taken Alice2026,Bob2025
+```
+
+`--taken-file` accepts a newline-delimited list, the `knoten citekeys --json` object (`{"citekeys":[...]}`), or `-` for stdin. The minted key lands in `x_vcoeur.citekey`; `citation_key` keeps the un-disambiguated base.
+
+### CSL-JSON export (`--csl`)
+
+```bash
+quelle --json resolve 10.1109/83.902291 --csl
+```
+
+Emits a single CSL-JSON item (`id` = CiteKey, `type`, `title`, `author` as `[{family, given}]`, `issued.date-parts`, `container-title`, `DOI`, `ISBN`, `URL`) for a reference manager or `citeproc`. This is an export — not the vault Source.
+
+Other flags: `--book` / `--article` (bias free-text only, mutually exclusive), `--no-cache`, `--download-pdf` / `-d` (OA / public-domain only).
 
 ## `quelle fetch`
 
@@ -127,6 +188,29 @@ quelle config edit
 ```bash
 quelle --version
 ```
+
+## `quelle schema`
+
+Dump the machine-readable CLI contract — every command and its flags (introspected from the live app), the Source field list and types, the `x_vcoeur` block, a summary of the CiteKey convention rules, the quelle→knoten kind map, and the exit codes. This is the authoritative, never-drifting contract; an agent should read it once to self-orient rather than relying on prose docs.
+
+```bash
+quelle --json schema      # full JSON contract
+quelle schema             # one-line TTY summary
+```
+
+## `quelle skill`
+
+Install the bundled agent skill (`quelle/skill/SKILL.md`, shipped as package data so it updates in lockstep with the CLI).
+
+```bash
+quelle skill install --user        # -> ~/.config/agents/skills/quelle/SKILL.md (default)
+quelle skill install --project     # -> <cwd>/.agents/skills/quelle/SKILL.md
+quelle skill install --claude      # -> ~/.claude/skills/quelle/SKILL.md
+quelle skill install --dest DIR    # -> DIR/SKILL.md
+quelle skill status                # where it is installed + whether it matches the bundled copy
+```
+
+The scope flags are mutually exclusive and `--dest` cannot be combined with one. An existing `SKILL.md` is not overwritten unless `--force` is passed. The skill is deliberately **convention-free** — it documents quelle's CLI contract (resolve / fetch / search / schema, the Source shape, CiteKey minting, exit codes), not any particular vault's conventions.
 
 ## Behaviour
 

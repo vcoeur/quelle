@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 from typing import Any, Literal
 
-Kind = Literal["article", "preprint", "book", "book-chapter"]
+Kind = Literal["article", "preprint", "book", "book-chapter", "web", "media"]
 
 # Fields handled out-of-band by `Publication.merged_with`; everything else
 # is folded automatically by the field-list-driven loop. Keeping the skip

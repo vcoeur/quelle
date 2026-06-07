@@ -45,6 +45,11 @@ source = "vcs"
 [tool.hatch.build.targets.wheel]
 packages = ["quelle"]
 
+# Ship the bundled agent skill as package data so `quelle skill install` can
+# copy it out of an installed wheel (not just a source checkout).
+[tool.hatch.build.targets.wheel.force-include]
+"quelle/skill/SKILL.md" = "quelle/skill/SKILL.md"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
@@ -68,3 +73,4 @@ ignore = ["SIM105", "SIM117"]
 [tool.ruff.lint.per-file-ignores]
 # Typer's Option(...) default-arg pattern is idiomatic; B008 flags it.
 "quelle/cli/main.py" = ["B008"]
+"quelle/cli/skill.py" = ["B008"]

@@ -22,7 +22,9 @@ from quelle import __version__
 from quelle.cli._helpers import (
     exit_code_for,
     hit_to_dict,
+    load_taken_set,
     looks_like_explicit_id,
+    publication_to_csl,
     publication_to_dict,
     report_error,
     resolve_type_hint,
@@ -31,11 +33,13 @@ from quelle.cli._helpers import (
 from quelle.cli.config import config_app
 from quelle.cli.output import (
     OutputMode,
+    emit_json,
     render_cache_list,
     render_config,
     render_publication,
     render_search,
 )
+from quelle.cli.skill import skill_app
 from quelle.repositories.cache import Cache
 from quelle.repositories.errors import (
     NotFoundError,
@@ -44,7 +48,8 @@ from quelle.repositories.errors import (
 )
 from quelle.repositories.http_client import build_client
 from quelle.services import search as search_service
-from quelle.services.resolver import resolve_with_enrichment
+from quelle.services.citekey import base_key, mint
+from quelle.services.resolver import resolve_any, resolve_with_enrichment
 from quelle.services.search import SearchType
 from quelle.settings import Settings, load_settings
 
@@ -57,6 +62,7 @@ app = typer.Typer(
 cache_app = typer.Typer(help="Inspect the local SQLite cache.", no_args_is_help=True)
 app.add_typer(cache_app, name="cache")
 app.add_typer(config_app, name="config")
+app.add_typer(skill_app, name="skill")
 
 # Documented hard ceiling on `--limit`. Each upstream caps `per-page` lower
 # than this (Google Books at 40, Semantic Scholar at 100, OpenAlex at 200);
@@ -222,6 +228,147 @@ def _fetch_with_cache(
             if cache_handle is not None:
                 cache_handle.upsert(publication)
     return publication
+
+
+@app.command()
+def resolve(
+    ctx: typer.Context,
+    input: str = typer.Argument(
+        ...,
+        help="Anything: a local .pdf path, an http(s) URL, a DOI / ISBN / "
+        'arXiv id, or "Title[, Author]".',
+    ),
+    taken: str = typer.Option(
+        None, "--taken", help="Comma-separated CiteKeys already taken in the vault."
+    ),
+    taken_file: str = typer.Option(
+        None,
+        "--taken-file",
+        help="File of taken CiteKeys (newline list or `knoten citekeys --json`); `-` reads stdin.",
+    ),
+    csl: bool = typer.Option(
+        False, "--csl", help="Emit a CSL-JSON item instead of the Source dict."
+    ),
+    download_pdf: bool = typer.Option(
+        False, "--download-pdf", "-d", help="Also download the OA PDF when available."
+    ),
+    no_cache: bool = typer.Option(
+        False, "--no-cache", help="Bypass the local cache (always hit the network)."
+    ),
+    book: bool = typer.Option(False, "--book", help="Bias toward book sources (free-text only)."),
+    article: bool = typer.Option(
+        False, "--article", help="Bias toward article sources (free-text only)."
+    ),
+) -> None:
+    """Resolve ANY source to a Publication and mint its vault-ready CiteKey.
+
+    Routes by input shape — local PDF, web/media URL, DOI/ISBN/arXiv id,
+    or free text — and always returns a normalised Source: the Publication
+    dict plus a top-level `x_vcoeur` block whose `citekey` is minted against
+    the injected taken-set (`--taken` / `--taken-file`). `--csl` exports a
+    CSL-JSON item instead. `--book` / `--article` only steer free text.
+    """
+    type_hint = _type_hint_or_exit(book, article)
+    try:
+        taken_keys = load_taken_set(taken, taken_file)
+    except (OSError, ValueError) as exc:
+        report_error(UserError(f"could not read taken-set: {exc}"))
+        raise typer.Exit(1) from exc
+
+    settings = _load()
+    try:
+        with build_client(settings) as client:
+            if no_cache:
+                publication = _resolve_any_with_pdf(
+                    client,
+                    settings,
+                    input,
+                    cache_handle=None,
+                    type_hint=type_hint,
+                    download_pdf=download_pdf,
+                )
+            else:
+                with Cache.open(settings.paths.cache_db) as cache_handle:
+                    publication = _resolve_any_with_pdf(
+                        client,
+                        settings,
+                        input,
+                        cache_handle=cache_handle,
+                        type_hint=type_hint,
+                        download_pdf=download_pdf,
+                    )
+    except PublicationsError as exc:
+        report_error(exc)
+        raise typer.Exit(exit_code_for(exc)) from exc
+
+    minted = mint(base_key(publication), taken_keys)
+    if csl:
+        emit_json(publication_to_csl(publication, citekey=minted))
+        return
+    render_publication(
+        publication_to_dict(publication, citekey=minted),
+        mode=OutputMode.from_ctx(ctx),
+    )
+
+
+def _resolve_any_with_pdf(
+    client,
+    settings: Settings,
+    raw_input: str,
+    *,
+    cache_handle: Cache | None,
+    type_hint: str | None,
+    download_pdf: bool,
+):
+    """Route the input through `resolve_any`, then optionally download a PDF."""
+    publication = resolve_any(
+        client,
+        settings,
+        raw_input,
+        cache=cache_handle,
+        type_hint=type_hint,
+    )
+    if download_pdf and publication.local_pdf_path is None:
+        from quelle.services.pdf_resolver import resolve_and_download
+
+        outcome = resolve_and_download(client, settings, publication, settings.paths.pdf_dir)
+        if outcome.local_path is not None:
+            publication = replace(publication, local_pdf_path=str(outcome.local_path))
+            if cache_handle is not None:
+                cache_handle.upsert(publication)
+    return publication
+
+
+@app.command("schema")
+def cmd_schema(ctx: typer.Context) -> None:
+    """Dump the machine-readable CLI contract — commands, flags, Source
+    fields, the x_vcoeur block, the CiteKey rules, the kind map, and exit
+    codes. No network, no cache access.
+
+    Lets a client (or an LLM) self-orient from one call: every command and
+    its flags are introspected from the live app, and the static tables are
+    read from the modules that own them, so the output never drifts.
+    """
+    from quelle.services.schema import build_schema
+
+    payload = build_schema()
+    mode = OutputMode.from_ctx(ctx)
+    if mode.json:
+        emit_json(payload)
+        return
+    from rich.console import Console
+
+    console = Console()
+    console.print(f"[bold]quelle {payload['version']}[/bold] — {len(payload['commands'])} commands")
+    console.print("[bold]kinds:[/bold] " + ", ".join(payload["kinds"]))
+    console.print(
+        "[bold]kind map:[/bold] " + ", ".join(f"{k}→{v}" for k, v in payload["kind_map"].items())
+    )
+    console.print(
+        "[bold]exit codes:[/bold] "
+        + ", ".join(f"{e['code']}={e['meaning']}" for e in payload["exit_codes"])
+    )
+    console.print("[dim]pass --json (before the subcommand) for the full contract[/dim]")
 
 
 @app.command()
