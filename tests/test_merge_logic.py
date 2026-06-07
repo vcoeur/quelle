@@ -96,4 +96,4 @@ def test_citation_key_three_or_more_authors() -> None:
 
 def test_citation_key_missing_author_and_year() -> None:
     pub = Publication(title="Anonymous")
-    assert pub.citation_key() == "Unknownnd"
+    assert pub.citation_key() == "UnknownND"

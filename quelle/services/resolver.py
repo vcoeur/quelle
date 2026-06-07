@@ -307,9 +307,9 @@ def _enrich_book(
 ) -> Publication:
     """Fill missing book fields from the other book sources, in priority order.
 
-    Stops as soon as the record is "complete enough" — has a publisher,
-    a year, and either a description (abstract) or subjects. Each
-    source call is best-effort and swallowed on failure. The
+    Stops as soon as the record is "complete enough" — has authors, a
+    publisher, a year, and either a description (abstract) or subjects.
+    Each source call is best-effort and swallowed on failure. The
     iteration order comes from `_book_sources` so the primary chain
     and the enrichment loop never disagree.
     """
@@ -330,8 +330,16 @@ def _enrich_book(
 
 
 def _book_record_complete(record: Publication) -> bool:
-    """Heuristic for when to stop enriching a book record."""
-    return bool(record.publisher and record.year and (record.abstract or record.subjects))
+    """Heuristic for when to stop enriching a book record.
+
+    Requires `authors` too: an authorless record forces the CiteKey down to a
+    title-based key (e.g. `RadicalCandor2019`) instead of the author-based
+    `Scott2019`, so keep walking the book sources until a name turns up — Open
+    Library in particular often omits authors that Google Books carries.
+    """
+    return bool(
+        record.authors and record.publisher and record.year and (record.abstract or record.subjects)
+    )
 
 
 def _try_enrich(current: Publication, fetch: Callable[[], Publication]) -> Publication:

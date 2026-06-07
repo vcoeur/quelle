@@ -45,7 +45,8 @@ CITEKEY_RULES: dict[str, Any] = {
     "authorless_other": "Article/book/PDF without author: CamelTitle(first 3 words)+YYYY.",
     "last_resort": "No author/site/title: RegistrableDomain+AccessDate, e.g. ExampleCom20260607.",
     "mint": "Collision: append lowercase suffix walking a,b,...,z,aa,ab,... until free.",
-    "year_fallback": "Missing year renders as 'nd'.",
+    "year_fallback": "Web/media: an undated source uses the retrieval year (today). "
+    "Authored / authorless-other: a missing year renders as 'ND' (uppercase).",
 }
 
 X_VCOEUR_BLOCK: dict[str, str] = {
