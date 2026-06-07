@@ -130,8 +130,24 @@ def _has_usable_author(pub: Publication) -> bool:
     return bool(pub.authors and pub.authors[0].name and pub.authors[0].name.strip())
 
 
-def _year_or_nd(pub: Publication) -> str:
-    return str(pub.year) if pub.year else "nd"
+def _retrieval_year() -> str:
+    """The current (retrieval) year — when the source was fetched."""
+    return str(datetime.now().year)
+
+
+def _year_or_retrieval(pub: Publication) -> str:
+    """Year for web/media keys: the publication year, else the retrieval year.
+
+    A fetched-but-undated web page or video is dated by *when it was retrieved*
+    (today's year) rather than a no-date marker — it was a live source at that
+    point in time.
+    """
+    return str(pub.year) if pub.year else _retrieval_year()
+
+
+def _year_or_missing(pub: Publication) -> str:
+    """Year for authored / authorless-other keys: the year, else `ND` (no date)."""
+    return str(pub.year) if pub.year else "ND"
 
 
 def _web_key(pub: Publication) -> str:
@@ -143,7 +159,7 @@ def _web_key(pub: Publication) -> str:
     registrable-domain label with the TLD dropped. An optional `-ref`
     slug is taken from the last URL path segment when present.
     """
-    year = _year_or_nd(pub)
+    year = _year_or_retrieval(pub)
     url = pub.source_url
 
     if url and _host(url) in {"github.com", "www.github.com"}:
@@ -171,7 +187,7 @@ def _media_key(pub: Publication) -> str:
     id (YouTube `v=`, `youtu.be/<id>`, or the last path segment).
     Falls back to the generic site rule when no channel is known.
     """
-    year = _year_or_nd(pub)
+    year = _year_or_retrieval(pub)
     url = pub.source_url
 
     channel = _camel(pub.venue) if pub.venue else ""
@@ -191,7 +207,7 @@ def _authorless_other_key(pub: Publication) -> str:
     Uses the first few title words; falls back to the last-resort
     domain+date key when there is no usable title.
     """
-    year = _year_or_nd(pub)
+    year = _year_or_missing(pub)
     if pub.title:
         label = _camel_words(pub.title, max_words=3)
         if label:

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from quelle.models.publication import Author, Publication
 from quelle.services.citekey import base_key, mint, vault_kind
+
+# Web/media keys date an undated source by its retrieval year (today).
+_THIS_YEAR = str(datetime.now().year)
 
 
 def _authored(names: list[str], year: int | None) -> Publication:
@@ -29,7 +33,7 @@ def test_base_key_authored_three_or_more() -> None:
 
 
 def test_base_key_authored_missing_year() -> None:
-    assert base_key(_authored(["Rosenblatt"], None)) == "Rosenblattnd"
+    assert base_key(_authored(["Rosenblatt"], None)) == "RosenblattND"
 
 
 # --- base_key: web --------------------------------------------------------
@@ -51,9 +55,9 @@ def test_base_key_web_from_domain_no_ref() -> None:
     assert base_key(pub) == "Bambulab2024"
 
 
-def test_base_key_web_no_year_with_path_ref() -> None:
+def test_base_key_web_no_year_uses_retrieval_year() -> None:
     pub = Publication(title="Post", source_url="https://example.com/blog/my-post", kind="web")
-    assert base_key(pub) == "Examplend-mypost"
+    assert base_key(pub) == f"Example{_THIS_YEAR}-mypost"
 
 
 def test_base_key_web_github_org_repo() -> None:
@@ -86,7 +90,7 @@ def test_base_key_media_youtu_be_short() -> None:
 
 def test_base_key_media_falls_back_to_site_when_no_channel() -> None:
     pub = Publication(title="V", source_url="https://vimeo.com/12345", kind="media")
-    assert base_key(pub) == "Vimeond-12345"
+    assert base_key(pub) == f"Vimeo{_THIS_YEAR}-12345"
 
 
 # --- base_key: fallbacks --------------------------------------------------
@@ -101,7 +105,7 @@ def test_base_key_last_resort_domain_plus_date() -> None:
     # No author, no site/venue, no title — only a URL: domain + access date.
     pub = Publication(title="", source_url="https://example.com/", kind="web")
     key = base_key(pub)
-    assert re.fullmatch(r"Examplend|ExampleCom\d{8}", key), key
+    assert re.fullmatch(rf"Example{_THIS_YEAR}|ExampleCom\d{{8}}", key), key
     # An authorless record with neither title nor URL still yields a key.
     bare = Publication(title="")
     assert re.fullmatch(r"Source\d{8}", base_key(bare))

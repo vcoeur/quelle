@@ -13,10 +13,10 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from quelle.models.publication import Publication
+from quelle.models.publication import Author, Publication
 from quelle.repositories.errors import NotFoundError
 from quelle.repositories.sources import bnf, google_books, open_library, openalex
-from quelle.services.resolver import resolve_book_primary
+from quelle.services.resolver import _book_record_complete, _enrich_book, resolve_book_primary
 from quelle.settings import Settings
 
 
@@ -143,3 +143,59 @@ def test_all_sources_miss_raises_last_error(
     with pytest.raises(NotFoundError, match="openalex"):
         resolve_book_primary(fake_client, tmp_settings, "9780000000002")
     assert calls == ["open_library", "google_books", "bnf", "openalex"]
+
+
+def _complete_book(source: str, *, authors: list[Author]) -> Publication:
+    """A book record that is 'complete' except possibly for its authors."""
+    return Publication(
+        title="Radical Candor",
+        kind="book",
+        isbn_13="9780000000002",
+        authors=authors,
+        publisher="St. Martin's Press",
+        year=2019,
+        subjects=["management"],
+        resolved_from_chain=[source],
+    )
+
+
+def test_record_incomplete_without_authors() -> None:
+    """A book missing only its authors is not 'complete' — enrichment continues."""
+    assert not _book_record_complete(_complete_book("open_library", authors=[]))
+    assert _book_record_complete(_complete_book("open_library", authors=[Author(name="Kim Scott")]))
+
+
+def test_enrich_book_backfills_authors_from_secondary(
+    fake_client: httpx.Client,
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Primary source has everything but authors; enrichment walks on to the
+    source that carries the author, so the CiteKey ends up author-based."""
+    primary = _complete_book("open_library", authors=[])
+
+    def google_with_author(client, settings, isbn):
+        del client, settings, isbn
+        return Publication(
+            title="Radical Candor",
+            kind="book",
+            isbn_13="9780000000002",
+            authors=[Author(name="Kim Scott")],
+            resolved_from_chain=["google_books"],
+        )
+
+    def raise_not_found(name: str):
+        def stub(client, settings, isbn):
+            del client, settings, isbn
+            raise NotFoundError(f"{name}: no record")
+
+        return stub
+
+    monkeypatch.setattr(google_books, "fetch_by_isbn", google_with_author)
+    monkeypatch.setattr(bnf, "fetch_by_isbn", raise_not_found("bnf"))
+    monkeypatch.setattr(openalex, "fetch_by_isbn", raise_not_found("openalex"))
+
+    enriched = _enrich_book(fake_client, tmp_settings, primary)
+
+    assert [a.name for a in enriched.authors] == ["Kim Scott"]
+    assert enriched.citation_key() == "Scott2019"

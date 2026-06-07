@@ -130,9 +130,9 @@ class Publication:
         - Two authors: `Last1Last2Year` (e.g. `KahnemanTversky1972`)
         - Three or more: `LastnameAlYear` (e.g. `CasellesAl1997`)
 
-        Falls back to `Unknown` / `nd` for missing author / year.
+        Falls back to `Unknown` / `ND` for missing author / year.
         """
-        year = str(self.year) if self.year else "nd"
+        year = str(self.year) if self.year else "ND"
         if not self.authors or not self.authors[0].name:
             return f"Unknown{year}"
 
