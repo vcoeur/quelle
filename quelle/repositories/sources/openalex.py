@@ -153,7 +153,9 @@ def _to_publication(work: dict[str, Any]) -> Publication:
     authors: list[Author] = []
     for entry in authorships:
         author = entry.get("author") or {}
-        name = author.get("display_name") or ""
+        # Whitespace-only display names are as unusable as missing ones —
+        # strip so they are rejected the same way.
+        name = (author.get("display_name") or "").strip()
         if not name:
             continue
         institutions = entry.get("institutions") or []

@@ -71,6 +71,22 @@ def test_to_publication_skips_authors_without_name() -> None:
     assert [author.name for author in publication.authors] == ["Real Person"]
 
 
+def test_to_publication_skips_whitespace_only_author_names() -> None:
+    # Regression: a " " display_name used to pass the empty-name guard and
+    # later crash Publication.citation_key().
+    work = {
+        "title": "Garbage author paper",
+        "publication_year": 2020,
+        "authorships": [
+            {"author": {"display_name": "   "}, "institutions": []},
+            {"author": {"display_name": "Real Person"}, "institutions": []},
+        ],
+    }
+    publication = _to_publication(work)
+    assert [author.name for author in publication.authors] == ["Real Person"]
+    assert publication.citation_key() == "Person2020"
+
+
 def test_to_publication_missing_title_yields_empty_string() -> None:
     publication = _to_publication({"publication_year": 2020})
     assert publication.title == ""

@@ -13,10 +13,12 @@ Two layers:
   already taken in the destination vault, appending a lowercase suffix
   (`a`, `b`, …, `z`, `aa`, …) until free.
 
-Authored works delegate to `Publication.citation_key()` (the existing
-BibTeX rule). Authorless web/media/PDF sources get site/channel/title
-rules, falling back to a deterministic domain+date key so a key is
-always produced.
+Authored works delegate to `Publication.citation_key()` — the authored
+branch of the convention is *derived there*, in the model (accent
+folding, `[A-Za-z0-9]` sanitisation, unusable-name skipping included),
+because the models layer cannot import this module. Authorless
+web/media/PDF sources get site/channel/title rules, falling back to a
+deterministic domain+date key so a key is always produced.
 """
 
 from __future__ import annotations
@@ -79,8 +81,9 @@ def base_key(pub: Publication) -> str:
 
     Branches by source shape:
 
-    - **Authored** (a usable first-author name): the existing BibTeX
-      rule via `pub.citation_key()`.
+    - **Authored** (any usable author name): delegates to
+      `pub.citation_key()`, where the authored branch of the
+      convention (BibTeX rule + folding/sanitisation) lives.
     - **web** (`kind == "web"`, no author): `SiteNameYYYY[-ref]`.
     - **media** (`kind == "media"`, no author): `ChannelYYYY[-id]`.
     - **other authorless** (article/book/PDF with a title): a
@@ -126,8 +129,13 @@ def _suffixes():
 
 
 def _has_usable_author(pub: Publication) -> bool:
-    """True when the first author carries a non-empty name."""
-    return bool(pub.authors and pub.authors[0].name and pub.authors[0].name.strip())
+    """True when any author carries a non-whitespace name.
+
+    Mirrors `Publication.citation_key()`, which skips unusable names —
+    so the authored branch is taken exactly when the model can derive
+    an authored key.
+    """
+    return any(author.name and author.name.strip() for author in pub.authors)
 
 
 def _retrieval_year() -> str:
