@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 
 from quelle.models.publication import Publication
-from quelle.repositories.errors import NetworkError, UserError
+from quelle.repositories.errors import NetworkError, RateLimitError, UserError
 from quelle.repositories.pdf_downloader import download_pdf
 from quelle.repositories.sources import unpaywall
 from quelle.services import citekey
@@ -183,6 +183,8 @@ def _unpaywall_pdf_url(client: httpx.Client, settings: Settings, doi: str) -> st
         return None
     try:
         payload = unpaywall.lookup_by_doi(client, settings, doi)
-    except Exception:  # noqa: BLE001
+    except RateLimitError:
+        raise
+    except NetworkError:
         return None
     return unpaywall.extract_pdf_url(payload)
