@@ -8,12 +8,13 @@ shape is documented at:
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from quelle.models.publication import Author, Publication
 from quelle.models.search import HitType, SearchHit
-from quelle.repositories.errors import NotFoundError
+from quelle.repositories.errors import NetworkError, NotFoundError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
@@ -48,8 +49,13 @@ def fetch_by_doi(client: httpx.Client, settings: Settings, doi: str) -> Publicat
     first. OpenAlex also accepts full `https://doi.org/...` URLs on
     this endpoint, but we keep the call site simple.
     """
-    url = f"{WORKS_URL}/doi:{doi}"
-    payload = get_json(client, url, params=_auth_params(settings))
+    url = f"{WORKS_URL}/doi:{quote(doi, safe='/')}"
+    try:
+        payload = get_json(client, url, params=_auth_params(settings))
+    except NetworkError as exc:
+        if exc.status_code == 404:
+            raise NotFoundError(f"no OpenAlex work for DOI: {doi}") from exc
+        raise
     return _to_publication(payload)
 
 
@@ -97,7 +103,12 @@ def search(
     """
     filters: list[str] = []
     if author:
-        filters.append(f"author.display_name.search:{author}")
+        # `,` joins filters and `:` separates key from value in OpenAlex's
+        # filter syntax — a user-supplied author containing either would
+        # inject extra filter clauses. Replace both with spaces.
+        safe_author = author.replace(",", " ").replace(":", " ").strip()
+        if safe_author:
+            filters.append(f"author.display_name.search:{safe_author}")
     if kind == "book":
         filters.append("type:book|book-chapter")
     elif kind == "article":

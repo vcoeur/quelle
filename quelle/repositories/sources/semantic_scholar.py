@@ -8,12 +8,13 @@ https://api.semanticscholar.org/api-docs/graph
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from quelle.models.publication import Author, Publication
 from quelle.models.search import SearchHit
-from quelle.repositories.errors import NotFoundError
+from quelle.repositories.errors import NetworkError, NotFoundError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
@@ -51,31 +52,27 @@ _FIELDS = ",".join(
 
 
 def _auth_headers(settings: Settings) -> dict[str, str]:
+    """The `x-api-key` header, when `SEMANTIC_SCHOLAR_API_KEY` is configured."""
     headers: dict[str, str] = {}
-    key = getattr(settings, "semantic_scholar_api_key", "")
-    if key:
-        headers["x-api-key"] = key
+    if settings.semantic_scholar_api_key:
+        headers["x-api-key"] = settings.semantic_scholar_api_key
     return headers
-
-
-def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Publication:
-    """Return the single best Semantic Scholar match for a title."""
-    url = f"{API_BASE}/paper/search/match"
-    payload = get_json(
-        client,
-        url,
-        params={"query": title, "fields": _FIELDS},
-    )
-    data = payload.get("data") or []
-    if not data:
-        raise NotFoundError(f"no Semantic Scholar match for title: {title!r}")
-    return _to_publication(data[0])
 
 
 def fetch_by_doi(client: httpx.Client, settings: Settings, doi: str) -> Publication:
     """Return the Semantic Scholar record for a specific DOI."""
-    url = f"{API_BASE}/paper/DOI:{doi}"
-    payload = get_json(client, url, params={"fields": _FIELDS})
+    url = f"{API_BASE}/paper/DOI:{quote(doi, safe='/')}"
+    try:
+        payload = get_json(
+            client,
+            url,
+            params={"fields": _FIELDS},
+            headers=_auth_headers(settings),
+        )
+    except NetworkError as exc:
+        if exc.status_code == 404:
+            raise NotFoundError(f"no Semantic Scholar record for DOI: {doi}") from exc
+        raise
     return _to_publication(payload)
 
 
@@ -95,7 +92,6 @@ def search(
     `kind` is accepted for signature uniformity but ignored — the
     endpoint only returns scholarly articles.
     """
-    del settings  # auth header path not yet wired through get_json
     del kind
     full_query = f"{query} {author}".strip() if author else query
     url = f"{API_BASE}/paper/search"
@@ -107,6 +103,7 @@ def search(
             "limit": str(limit),
             "fields": _SEARCH_FIELDS,
         },
+        headers=_auth_headers(settings),
     )
     data = payload.get("data") or []
     return [_to_search_hit(paper, rank) for rank, paper in enumerate(data)]

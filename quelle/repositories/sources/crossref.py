@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from quelle.models.publication import Author, Publication
-from quelle.repositories.errors import NotFoundError
+from quelle.repositories.errors import NetworkError, NotFoundError
 from quelle.repositories.http_client import get_json
 from quelle.settings import Settings
 
@@ -37,8 +38,13 @@ def fetch_by_doi(client: httpx.Client, settings: Settings, doi: str) -> Publicat
     Accepts a bare DOI (`10.xxxx/yyyy`). The caller should strip any
     `https://doi.org/` prefix first.
     """
-    url = f"{WORKS_URL}/{doi}"
-    payload = get_json(client, url, params=_polite_params(settings))
+    url = f"{WORKS_URL}/{quote(doi, safe='/')}"
+    try:
+        payload = get_json(client, url, params=_polite_params(settings))
+    except NetworkError as exc:
+        if exc.status_code == 404:
+            raise NotFoundError(f"no Crossref record for DOI: {doi}") from exc
+        raise
     message = payload.get("message")
     if not message:
         raise NotFoundError(f"no Crossref record for DOI: {doi}")

@@ -82,3 +82,43 @@ def test_download_raises_on_http_error(tmp_path: Path, tmp_settings) -> None:
     dest = tmp_path / "missing.pdf"
     with _make_client(handler) as client, pytest.raises(NetworkError, match="404"):
         download_pdf(client, "https://x/y.pdf", dest, tmp_settings)
+
+
+def test_download_rejects_empty_200_body(tmp_path: Path, tmp_settings) -> None:
+    """A 200 with no body used to bypass validation and land a 0-byte PDF."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"", headers={"content-type": "application/pdf"})
+
+    dest = tmp_path / "downloads" / "empty.pdf"
+    with _make_client(handler) as client, pytest.raises(NetworkError, match="not a PDF"):
+        download_pdf(client, "https://x/y.pdf", dest, tmp_settings)
+    assert not dest.exists()
+    assert list(dest.parent.iterdir()) == []  # no orphaned temp file either
+
+
+def test_download_leaves_no_temp_file_on_success(tmp_path: Path, tmp_settings) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"%PDF-1.4 body", headers={"content-type": "application/pdf"}
+        )
+
+    dest = tmp_path / "downloads" / "clean.pdf"
+    with _make_client(handler) as client:
+        download_pdf(client, "https://x/y.pdf", dest, tmp_settings)
+    assert [path.name for path in dest.parent.iterdir()] == ["clean.pdf"]
+
+
+def test_download_overwrites_existing_destination(tmp_path: Path, tmp_settings) -> None:
+    """Re-downloading the same work replaces the previous file atomically."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, content=b"%PDF-1.7 new body", headers={"content-type": "application/pdf"}
+        )
+
+    dest = tmp_path / "again.pdf"
+    dest.write_bytes(b"%PDF-1.4 old body")
+    with _make_client(handler) as client:
+        download_pdf(client, "https://x/y.pdf", dest, tmp_settings)
+    assert dest.read_bytes() == b"%PDF-1.7 new body"

@@ -7,6 +7,7 @@ aborts downloads that exceed the configured `max_pdf_mb` limit.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,7 +38,10 @@ def download_pdf(
     """Download `url` to `dest_path`. Raises `NetworkError` on any failure."""
     max_bytes = settings.max_pdf_mb * 1024 * 1024
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
+    # The PID makes the temp name unique per process so two concurrent
+    # invocations targeting the same destination don't interleave writes;
+    # the final `replace` keeps the swap-in atomic either way.
+    tmp_path = dest_path.with_suffix(dest_path.suffix + f".{os.getpid()}.part")
 
     try:
         with client.stream("GET", url) as response:
@@ -61,6 +65,10 @@ def download_pdf(
                     if size > max_bytes:
                         raise NetworkError(f"PDF exceeds {settings.max_pdf_mb} MB limit at {url}")
                     handle.write(chunk)
+            if not first_chunk_seen:
+                # A 200 with an empty body never reaches the magic-byte
+                # check above — reject it the same way as non-PDF content.
+                raise NetworkError(f"not a PDF: empty response body from {url}")
     except httpx.RequestError as exc:
         _cleanup(tmp_path)
         raise NetworkError(f"download failed: {exc}") from exc
