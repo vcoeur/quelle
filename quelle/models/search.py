@@ -73,8 +73,9 @@ class MergedHit:
             return ("isbn", self.isbn_13)
         if self.arxiv_id:
             return ("arxiv", self.arxiv_id)
-        if self.source_ids:
-            source = self.sources[0] if self.sources else next(iter(self.source_ids))
+        # Walk sources in first-seen order, then any id-bearing source not
+        # listed in `sources` — the first source may not carry an id.
+        for source in (*self.sources, *self.source_ids):
             value = self.source_ids.get(source)
             if value:
                 return (source, value)

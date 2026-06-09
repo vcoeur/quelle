@@ -22,18 +22,18 @@ and is versioned via the `meta` table (`schema_version`).
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from dataclasses import asdict, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
+# Identifier recognition is owned by `quelle._identifiers` — shared with
+# the resolver so routing and cache keying can never drift apart.
+from quelle._identifiers import ARXIV_ID_RE as _ARXIV_RE
+from quelle._identifiers import extract_doi as _extract_doi
+from quelle._identifiers import extract_isbn as _extract_isbn
 from quelle.models.publication import Author, Publication
 from quelle.repositories.errors import CacheError
-
-_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
-_ARXIV_RE = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+/\d{7}(v\d+)?)$", re.IGNORECASE)
-_ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
 
 SCHEMA_VERSION = 2
 
@@ -317,30 +317,6 @@ def _publication_from_payload(payload_json: str) -> Publication:
 def _title_key(title: str) -> str:
     """Lowercased, whitespace-collapsed title for title_key column."""
     return " ".join((title or "").split()).lower()
-
-
-def _extract_doi(query: str) -> str | None:
-    """Pull a bare DOI out of a DOI URL or raw query if one is present."""
-    lowered = query.lower()
-    lowered = lowered.removeprefix("https://doi.org/")
-    lowered = lowered.removeprefix("http://doi.org/")
-    lowered = lowered.removeprefix("doi:")
-    if _DOI_RE.match(lowered):
-        return lowered
-    return None
-
-
-def _extract_isbn(query: str) -> str | None:
-    """Pull a bare ISBN out of `ISBN: ...`, hyphenated, or plain digit strings."""
-    raw = query.strip().lower()
-    raw = raw.removeprefix("isbn:")
-    raw = raw.removeprefix("isbn ")
-    digits = "".join(ch for ch in raw if ch.isdigit() or ch in "xX").upper()
-    if not digits:
-        return None
-    if _ISBN_DIGITS_RE.match(digits):
-        return digits
-    return None
 
 
 def _strip_arxiv_version(arxiv_id: str) -> str:

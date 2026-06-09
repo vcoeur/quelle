@@ -1,9 +1,10 @@
 """Unit tests for the resolver's query-shape routing.
 
 The resolver itself is tested end-to-end via pytest-httpx in the CLI
-smoke tests. Here we cover only the private `_extract_doi` helper
-since that's the piece most likely to regress, plus the explicit
-Google-Scholar-URL rejection path.
+smoke tests. Identifier extraction lives in `quelle._identifiers` and
+is tested in `test_identifiers.py`; here we cover the routing built on
+top of it, the ISBN backfill, the Google-Scholar-URL rejection path,
+and the arXiv→OpenAlex enrichment title gate.
 """
 
 from __future__ import annotations
@@ -17,69 +18,10 @@ from quelle.models.publication import Publication
 from quelle.repositories.errors import UserError
 from quelle.services.resolver import (
     _backfill_isbn_pair,
-    _extract_doi,
-    _extract_isbn,
+    _enrich_article,
     resolve,
 )
 from quelle.settings import Settings
-
-
-def test_extract_doi_bare() -> None:
-    assert _extract_doi("10.1234/abcd") == "10.1234/abcd"
-
-
-def test_extract_doi_url() -> None:
-    assert _extract_doi("https://doi.org/10.1234/abcd") == "10.1234/abcd"
-
-
-def test_extract_doi_prefix() -> None:
-    assert _extract_doi("doi:10.1234/abcd") == "10.1234/abcd"
-
-
-def test_extract_doi_lowercased() -> None:
-    assert _extract_doi("10.1234/ABCD") == "10.1234/abcd"
-
-
-def test_extract_doi_rejects_non_doi() -> None:
-    assert _extract_doi("attention is all you need") is None
-
-
-def test_extract_doi_rejects_arxiv_id() -> None:
-    assert _extract_doi("1706.03762") is None
-
-
-def test_extract_isbn_13_plain() -> None:
-    assert _extract_isbn("9782070407132") == "9782070407132"
-
-
-def test_extract_isbn_13_hyphenated() -> None:
-    assert _extract_isbn("978-2-07-040713-2") == "9782070407132"
-
-
-def test_extract_isbn_with_isbn_prefix() -> None:
-    assert _extract_isbn("ISBN: 0-14-018633-6") == "0140186336"
-    assert _extract_isbn("isbn 9780140186338") == "9780140186338"
-
-
-def test_extract_isbn_10_with_x_check_digit() -> None:
-    assert _extract_isbn("020161622X") == "020161622X"
-
-
-def test_extract_isbn_rejects_doi() -> None:
-    assert _extract_isbn("10.1234/abcd") is None
-
-
-def test_extract_isbn_rejects_arxiv_id() -> None:
-    assert _extract_isbn("1706.03762") is None
-
-
-def test_extract_isbn_rejects_short_digit_run() -> None:
-    assert _extract_isbn("12345678") is None
-
-
-def test_extract_isbn_rejects_isbn13_with_wrong_prefix() -> None:
-    # 977 is the magazine prefix, not a book — ISBN-13 must start 978/979.
-    assert _extract_isbn("9770000000000") is None
 
 
 def test_isbn10_to_13_known_pairs() -> None:
@@ -262,3 +204,124 @@ def test_resolve_explicit_id_ignores_type_hint(
     finally:
         client.close()
     assert captured["isbn"] == "9781839761232"
+
+
+def test_resolve_free_text_with_digit_scatter_goes_to_title_search(
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: "987654321 unix" used to assemble a phantom ISBN-10 and
+    mis-route to the book chain; it must fall through to title search."""
+    from quelle.repositories.sources import open_library, openalex
+
+    monkeypatch.setattr(
+        open_library,
+        "fetch_by_isbn",
+        lambda *a, **k: pytest.fail("book chain must not be called for free text"),
+    )
+    captured: dict[str, str] = {}
+
+    def fake_title_search(client, settings, title):
+        captured["title"] = title
+        return Publication(title=title, kind="article")
+
+    monkeypatch.setattr(openalex, "search_by_title", fake_title_search)
+
+    client = httpx.Client()
+    try:
+        resolve(client, tmp_settings, "987654321 unix")
+    finally:
+        client.close()
+    assert captured["title"] == "987654321 unix"
+
+
+@pytest.mark.parametrize("arxiv_id", ["math/0211159", "math.GT/0309136"])
+def test_resolve_routes_old_style_arxiv_ids_to_arxiv(
+    arxiv_id: str,
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bare old-style arXiv ids — with or without subject class — hit arXiv."""
+    from quelle.repositories.sources import arxiv
+
+    captured: dict[str, str] = {}
+
+    def fake_fetch(client, settings, query):
+        captured["id"] = query
+        return Publication(title="x", arxiv_id=query, kind="preprint")
+
+    monkeypatch.setattr(arxiv, "fetch_by_arxiv_id", fake_fetch)
+
+    client = httpx.Client()
+    try:
+        resolve(client, tmp_settings, arxiv_id)
+    finally:
+        client.close()
+    assert captured["id"] == arxiv_id
+
+
+def _arxiv_record(title: str) -> Publication:
+    return Publication(
+        title=title,
+        arxiv_id="1706.03762",
+        kind="preprint",
+        resolved_from_chain=["arxiv"],
+    )
+
+
+def test_enrich_article_skips_openalex_hit_with_mismatching_title(
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the OpenAlex title-search top hit merged unconditionally,
+    so a wrong hit's DOI became sticky and drove Crossref/S2 enrichment."""
+    from quelle.repositories.sources import openalex
+
+    wrong_hit = Publication(
+        title="A survey of completely unrelated metaheuristics",
+        doi="10.9999/wrong",
+        kind="article",
+        resolved_from_chain=["openalex"],
+    )
+    monkeypatch.setattr(openalex, "search_by_title", lambda *a, **k: wrong_hit)
+
+    client = httpx.Client()
+    try:
+        enriched = _enrich_article(client, tmp_settings, _arxiv_record("Attention Is All You Need"))
+    finally:
+        client.close()
+    assert enriched.doi is None
+    assert "openalex" not in enriched.resolved_from_chain
+
+
+def test_enrich_article_merges_openalex_hit_with_matching_title(
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A published version whose title matches (modulo case/punctuation) merges."""
+    from quelle.repositories.sources import openalex
+
+    published = Publication(
+        title="Attention is all you need!",
+        doi="10.5555/attention",
+        kind="article",
+        resolved_from_chain=["openalex"],
+    )
+    monkeypatch.setattr(openalex, "search_by_title", lambda *a, **k: published)
+    # Stop the chain after the title merge — Crossref/S2 are not under test.
+    from quelle.repositories.errors import NotFoundError
+    from quelle.repositories.sources import crossref, semantic_scholar
+
+    def raise_not_found(*_args, **_kwargs):
+        raise NotFoundError("no record")
+
+    monkeypatch.setattr(crossref, "fetch_by_doi", raise_not_found)
+    monkeypatch.setattr(semantic_scholar, "fetch_by_doi", raise_not_found)
+
+    client = httpx.Client()
+    try:
+        enriched = _enrich_article(client, tmp_settings, _arxiv_record("Attention Is All You Need"))
+    finally:
+        client.close()
+    assert enriched.doi == "10.5555/attention"
+    assert "openalex" in enriched.resolved_from_chain

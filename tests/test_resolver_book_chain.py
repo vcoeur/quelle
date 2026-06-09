@@ -199,3 +199,36 @@ def test_enrich_book_backfills_authors_from_secondary(
 
     assert [a.name for a in enriched.authors] == ["Kim Scott"]
     assert enriched.citation_key() == "Scott2019"
+
+
+def test_enrich_book_skips_every_source_already_in_chain(
+    fake_client: httpx.Client,
+    tmp_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A record already merged from several sources must not re-query them —
+    only the sources absent from `resolved_from_chain` are consulted."""
+    invoked: list[str] = []
+
+    def make_stub(source_name: str):
+        def stub(client, settings, isbn):
+            del client, settings, isbn
+            invoked.append(source_name)
+            raise NotFoundError(f"{source_name}: no record")
+
+        return stub
+
+    monkeypatch.setattr(open_library, "fetch_by_isbn", make_stub("open_library"))
+    monkeypatch.setattr(google_books, "fetch_by_isbn", make_stub("google_books"))
+    monkeypatch.setattr(bnf, "fetch_by_isbn", make_stub("bnf"))
+    monkeypatch.setattr(openalex, "fetch_by_isbn", make_stub("openalex"))
+
+    incomplete = Publication(
+        title="Radical Candor",
+        kind="book",
+        isbn_13="9780000000002",
+        resolved_from_chain=["open_library", "google_books"],
+    )
+    _enrich_book(fake_client, tmp_settings, incomplete)
+
+    assert invoked == ["bnf", "openalex"]

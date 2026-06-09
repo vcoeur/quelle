@@ -372,6 +372,104 @@ def test_default_limit_returns_three(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(result) == 3
 
 
+def test_merge_bridging_hit_unifies_doi_and_isbn_entries() -> None:
+    """Regression: a hit sharing a DOI with entry A and an ISBN with entry B
+    used to leave B behind — the same work appeared twice in the results."""
+    a = _hit(source="openalex", rank=0, title="Work (OpenAlex)", doi="10.1/w", type_="book")
+    b = _hit(
+        source="open_library",
+        rank=0,
+        title="Work (Open Library)",
+        isbn_13="9780140186338",
+        type_="book",
+    )
+    bridge = _hit(
+        source="google_books",
+        rank=0,
+        title="Work",
+        doi="10.1/w",
+        isbn_13="9780140186338",
+        type_="book",
+    )
+    merged = search_service._merge([[a], [b], [bridge]])
+    assert len(merged) == 1
+    assert merged[0].doi == "10.1/w"
+    assert merged[0].isbn_13 == "9780140186338"
+    assert set(merged[0].sources) == {"openalex", "open_library", "google_books"}
+
+
+def test_merge_after_bridge_later_hits_still_find_the_survivor() -> None:
+    """Ids that pointed at the absorbed entry are re-pointed: a later hit
+    matching only the absorbed entry's arXiv id merges into the survivor."""
+    a = _hit(source="openalex", rank=0, title="Work", doi="10.1/w")
+    b = _hit(source="semantic_scholar", rank=0, title="Work", arxiv_id="1706.03762")
+    bridge = _hit(source="arxiv", rank=0, title="Work", doi="10.1/w", arxiv_id="1706.03762")
+    late = _hit(source="arxiv", rank=1, title="Work", arxiv_id="1706.03762")
+    merged = search_service._merge([[a], [b], [bridge], [late]])
+    assert len(merged) == 1
+    assert merged[0].doi == "10.1/w"
+    assert merged[0].arxiv_id == "1706.03762"
+
+
+def test_search_bridged_entries_do_not_duplicate_in_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: the bridged work surfaces once regardless of the
+    nondeterministic source completion order."""
+    _patch_sources(
+        monkeypatch,
+        {
+            "openalex": [
+                _hit(
+                    source="openalex",
+                    rank=0,
+                    title="Cannibal Capitalism",
+                    doi="10.1/cc",
+                    type_="book",
+                    author="Nancy Fraser",
+                )
+            ],
+            "open_library": [
+                _hit(
+                    source="open_library",
+                    rank=0,
+                    title="Cannibal capitalism (UK ed.)",
+                    isbn_13="9781839761232",
+                    type_="book",
+                    author="Fraser, N.",
+                )
+            ],
+            "google_books": [
+                _hit(
+                    source="google_books",
+                    rank=0,
+                    title="Cannibal Capitalism",
+                    doi="10.1/cc",
+                    isbn_13="9781839761232",
+                    type_="book",
+                    author="Nancy Fraser",
+                )
+            ],
+        },
+    )
+    result = search_service.search(client=None, settings=None, query="x", limit=10)  # type: ignore[arg-type]
+    isbns = [hit.isbn_13 for hit in result if hit.isbn_13]
+    assert isbns.count("9781839761232") == 1
+    assert len(result) == 1
+
+
+def test_preferred_id_falls_through_to_other_sources_ids() -> None:
+    """`sources[0]` without a `source_ids` entry must not hide later ids."""
+    from quelle.models.search import MergedHit
+
+    hit = MergedHit(
+        title="Work",
+        sources=["bnf", "open_library"],
+        source_ids={"open_library": "/works/OL123W"},
+    )
+    assert hit.preferred_id() == ("open_library", "/works/OL123W")
+
+
 def test_dedup_by_isbn_collapses_book_hits(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_sources(
         monkeypatch,

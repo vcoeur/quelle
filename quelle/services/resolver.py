@@ -18,6 +18,7 @@ place and stays consistent.
 
 from __future__ import annotations
 
+import difflib
 import re
 from collections.abc import Callable
 from dataclasses import replace
@@ -25,6 +26,9 @@ from pathlib import Path
 
 import httpx
 
+from quelle._identifiers import ARXIV_ID_RE as _ARXIV_RE
+from quelle._identifiers import extract_doi as _extract_doi
+from quelle._identifiers import extract_isbn as _extract_isbn
 from quelle._isbn import isbn10_to_13, isbn13_to_10
 from quelle.models.publication import Publication
 from quelle.repositories.cache import Cache
@@ -40,15 +44,25 @@ from quelle.repositories.sources import (
 )
 from quelle.settings import Settings
 
-_DOI_RE = re.compile(r"^10\.\d{4,9}/\S+$")
-_ARXIV_RE = re.compile(r"^(\d{4}\.\d{4,5}(v\d+)?|[a-z\-]+/\d{7}(v\d+)?)$", re.IGNORECASE)
 _SCHOLAR_HOST_RE = re.compile(r"scholar\.google\.\w+", re.IGNORECASE)
-_ISBN_DIGITS_RE = re.compile(r"^[0-9]{9}[0-9X]$|^97[89][0-9]{10}$")
 
 # Identifiers embedded anywhere in a URL — used to route a landing page
 # (a DOI resolver link, an arXiv abs/pdf page) back to the rich resolver.
+# Bare-identifier shapes live in `quelle._identifiers`; only the
+# URL-embedding patterns are a resolver concern.
 _DOI_IN_URL_RE = re.compile(r"10\.\d{4,9}/[^\s?#]+")
-_ARXIV_IN_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([^\s?#/]+?)(?:\.pdf)?/?$", re.IGNORECASE)
+_ARXIV_IN_URL_RE = re.compile(
+    r"arxiv\.org/(?:abs|pdf)/((?:[a-z\-]+(?:\.[a-z]{2})?/)?[^\s?#/]+?)(?:\.pdf)?/?$",
+    re.IGNORECASE,
+)
+
+# Obvious file-extension suffixes that publisher URLs append after the DOI
+# (`…/10.1101/2020.01.01.123456v1.full.pdf`) — never part of the DOI itself.
+_DOI_TRAILING_EXT_RE = re.compile(r"\.(?:pdf|html?|xml|txt|full|abstract)$", re.IGNORECASE)
+
+# Minimum SequenceMatcher ratio for two normalised titles to count as the
+# same work during enrichment.
+_TITLE_MATCH_RATIO = 0.85
 
 
 # Single source of truth for the book-source priority chain. The
@@ -146,10 +160,17 @@ def resolve_any(
         return resolve_local_pdf(Path(stripped))
 
     if _is_http_url(stripped):
+        from quelle.services.url_resolver import resolve_url
+
         embedded = _embedded_identifier(stripped)
         if embedded is not None:
-            return resolve_with_enrichment(client, settings, embedded, cache=cache)
-        from quelle.services.url_resolver import resolve_url
+            try:
+                return resolve_with_enrichment(client, settings, embedded, cache=cache)
+            except NotFoundError:
+                # The extracted id can over- or under-capture (version
+                # suffixes, unregistered preprint DOIs) — degrade to the
+                # Open-Graph resolver instead of failing the whole resolve.
+                pass
 
         return resolve_url(client, settings, stripped)
 
@@ -188,11 +209,20 @@ def _embedded_identifier(url: str) -> str | None:
         return doi
     match = _DOI_IN_URL_RE.search(url)
     if match:
-        return match.group(0).rstrip("/")
+        return _trim_doi_file_extensions(match.group(0).rstrip("/"))
     arxiv_match = _ARXIV_IN_URL_RE.search(url)
     if arxiv_match and _ARXIV_RE.match(arxiv_match.group(1)):
         return arxiv_match.group(1)
     return None
+
+
+def _trim_doi_file_extensions(doi: str) -> str:
+    """Strip stacked trailing file extensions (`.full.pdf`) off a captured DOI."""
+    while True:
+        trimmed = _DOI_TRAILING_EXT_RE.sub("", doi)
+        if trimmed == doi:
+            return doi
+        doi = trimmed
 
 
 def resolve_book_primary(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
@@ -281,9 +311,13 @@ def _enrich_article(
     chain = current.resolved_from_chain
     started_on_arxiv = bool(chain) and chain[0] == "arxiv"
     if started_on_arxiv and not current.doi:
+        # The title search returns its top hit unconditionally; gate the
+        # merge on actual title similarity — a wrong hit's DOI is sticky
+        # and would drive the Crossref / S2 enrichment off the wrong work.
         current = _try_enrich(
             current,
             lambda: openalex.search_by_title(client, settings, current.title),
+            accept=lambda other: _titles_match(current.title, other.title),
         )
 
     if current.doi and (current.abstract is None or not current.venue):
@@ -317,11 +351,10 @@ def _enrich_book(
     if not isbn:
         return current
 
-    chain = current.resolved_from_chain
-    head = chain[0] if chain else None
-
     for source_name, fetch in _book_sources():
-        if source_name == head:
+        # Skip every source already merged into the record — the chain
+        # grows as the loop enriches, so check it live each iteration.
+        if source_name in current.resolved_from_chain:
             continue
         if _book_record_complete(current):
             break
@@ -342,40 +375,40 @@ def _book_record_complete(record: Publication) -> bool:
     )
 
 
-def _try_enrich(current: Publication, fetch: Callable[[], Publication]) -> Publication:
-    """Run `fetch`, merge its result into `current`, swallow failures."""
+def _try_enrich(
+    current: Publication,
+    fetch: Callable[[], Publication],
+    *,
+    accept: Callable[[Publication], bool] | None = None,
+) -> Publication:
+    """Run `fetch`, merge its result into `current`, swallow failures.
+
+    When `accept` is given, the fetched record is merged only if the
+    predicate approves it; otherwise `current` is returned unchanged.
+    """
     try:
         other = fetch()
     except (NotFoundError, NetworkError, PublicationsError):
         return current
+    if accept is not None and not accept(other):
+        return current
     return current.merged_with(other)
 
 
-def _extract_doi(query: str) -> str | None:
-    """Pull a bare DOI out of a DOI URL or raw query if one is present."""
-    lowered = query.lower()
-    lowered = lowered.removeprefix("https://doi.org/")
-    lowered = lowered.removeprefix("http://doi.org/")
-    lowered = lowered.removeprefix("doi:")
-    if _DOI_RE.match(lowered):
-        return lowered
-    return None
+def _titles_match(left: str, right: str) -> bool:
+    """True when two titles plausibly name the same work.
 
-
-def _extract_isbn(query: str) -> str | None:
-    """Pull a bare ISBN out of `ISBN: ...`, hyphenated, or plain digit strings.
-
-    Accepts ISBN-10 (9 digits + check, where check may be `X`) and
-    ISBN-13 (978/979 + 10 digits). Hyphens and spaces are stripped
-    before validating; the returned form is digits-only (with `X`
-    preserved on ISBN-10).
+    Casefolded, non-alphanumerics stripped; containment covers subtitle
+    differences, the similarity ratio covers small wording drift.
     """
-    raw = query.strip().lower()
-    raw = raw.removeprefix("isbn:")
-    raw = raw.removeprefix("isbn ")
-    digits = "".join(ch for ch in raw if ch.isdigit() or ch in "xX").upper()
-    if not digits:
-        return None
-    if _ISBN_DIGITS_RE.match(digits):
-        return digits
-    return None
+    a = _normalised_title(left)
+    b = _normalised_title(right)
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= _TITLE_MATCH_RATIO
+
+
+def _normalised_title(title: str) -> str:
+    return "".join(ch for ch in title.casefold() if ch.isalnum())
