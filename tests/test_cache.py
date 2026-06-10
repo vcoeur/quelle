@@ -226,6 +226,266 @@ def test_open_is_idempotent_on_already_v2_cache(tmp_path: Path) -> None:
         assert cache.stats()["schema_version"] == SCHEMA_VERSION
 
 
+def _build_v2_cache(db_path: Path) -> None:
+    """Hand-build a v2 cache file so the v3 migration path can be exercised.
+
+    Mirrors the v2 schema verbatim — `citation_key TEXT PRIMARY KEY`
+    plus the five partial unique identifier indexes — and seeds two
+    rows, one carrying a full-URL OpenAlex id as v2 writes stored it.
+    """
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE publications (
+                citation_key TEXT PRIMARY KEY,
+                doi          TEXT,
+                openalex_id  TEXT,
+                arxiv_id     TEXT,
+                isbn_10      TEXT,
+                isbn_13      TEXT,
+                title_key    TEXT,
+                payload_json TEXT NOT NULL,
+                cached_at    TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX publications_doi ON publications(doi)
+                WHERE doi IS NOT NULL;
+            CREATE UNIQUE INDEX publications_openalex ON publications(openalex_id)
+                WHERE openalex_id IS NOT NULL;
+            CREATE UNIQUE INDEX publications_arxiv ON publications(arxiv_id)
+                WHERE arxiv_id IS NOT NULL;
+            CREATE UNIQUE INDEX publications_isbn_13 ON publications(isbn_13)
+                WHERE isbn_13 IS NOT NULL;
+            CREATE UNIQUE INDEX publications_isbn_10 ON publications(isbn_10)
+                WHERE isbn_10 IS NOT NULL;
+            CREATE INDEX publications_title ON publications(title_key);
+            """
+        )
+        connection.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?)",
+            ("schema_version", "2"),
+        )
+        rows = [
+            (
+                "ChanVese2001",
+                "10.1109/83.902291",
+                "https://openalex.org/W2148263991",
+                None,
+                None,
+                None,
+                "active contours without edges",
+                (
+                    '{"title": "Active contours without edges", "authors": [], '
+                    '"resolved_from_chain": ["openalex"]}'
+                ),
+                "2026-01-01T00:00:00+00:00",
+            ),
+            (
+                "Vaswani2017",
+                None,
+                None,
+                "1706.03762",
+                None,
+                None,
+                "attention is all you need",
+                (
+                    '{"title": "Attention Is All You Need", "authors": [], '
+                    '"resolved_from_chain": ["arxiv"]}'
+                ),
+                "2026-01-02T00:00:00+00:00",
+            ),
+        ]
+        connection.executemany(
+            "INSERT INTO publications "
+            "(citation_key, doi, openalex_id, arxiv_id, isbn_10, isbn_13, "
+            " title_key, payload_json, cached_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_open_migrates_v2_cache_to_surrogate_id(tmp_path: Path) -> None:
+    """Opening a v2 cache must rebuild it around the surrogate-id key.
+
+    Every row must survive the recreate-and-copy, full-URL OpenAlex ids
+    must be normalised to the bare form, and citation_key must stop
+    being the primary key (so colliding keys no longer destroy rows).
+    """
+    db_path = tmp_path / "cache.sqlite"
+    _build_v2_cache(db_path)
+
+    with Cache.open(db_path) as cache:
+        assert cache.stats()["total"] == 2
+        assert cache.stats()["schema_version"] == SCHEMA_VERSION
+        hit = cache.get_by_doi("10.1109/83.902291")
+        assert hit is not None and hit.title == "Active contours without edges"
+        assert cache.get_by_arxiv_id("1706.03762") is not None
+        # Full-URL OpenAlex id was normalised and is now findable.
+        assert cache.get_by_openalex_id("W2148263991") is not None
+
+        # citation_key no longer collides: a different work minting
+        # ChanVese2001 coexists with the migrated row.
+        cache.upsert(
+            Publication(
+                title="A different Chan-Vese paper",
+                authors=[Author(name="Bob Chan"), Author(name="Carla Vese")],
+                year=2001,
+                doi="10.9999/other",
+            )
+        )
+        assert cache.stats()["total"] == 3
+        assert cache.get_by_doi("10.1109/83.902291") is not None
+
+    connection = sqlite3.connect(db_path)
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(publications)")}
+        assert "id" in columns
+        stored = connection.execute(
+            "SELECT openalex_id FROM publications WHERE doi = '10.1109/83.902291'"
+        ).fetchone()
+        assert stored[0] == "W2148263991"
+    finally:
+        connection.close()
+
+
+def test_upsert_same_work_under_new_citation_key_updates_row(cache: Cache) -> None:
+    """Re-resolving the same work under a different key must not crash.
+
+    Under the v2 schema this hit the unique DOI index (IntegrityError);
+    now the row is found by identifier and updated in place, key included.
+    """
+    cache.upsert(_chan_vese())
+
+    from dataclasses import replace
+
+    # Same DOI, but the author list now mints a different citation key.
+    rekeyed = replace(
+        _chan_vese(),
+        authors=[Author(name="Tony F. Chan")],
+        abstract="Re-resolved abstract.",
+    )
+    cache.upsert(rekeyed)
+
+    assert cache.stats()["total"] == 1
+    hit = cache.get_by_doi("10.1109/83.902291")
+    assert hit is not None
+    assert hit.abstract == "Re-resolved abstract."
+    entries = cache.list_entries(limit=10)
+    assert [e["citation_key"] for e in entries] == ["Chan2001"]
+
+
+def test_same_citation_key_different_works_both_survive(cache: Cache) -> None:
+    """Two distinct works minting the same key coexist as separate rows."""
+    first = Publication(
+        title="A theory of everything",
+        authors=[Author(name="Alice Smith")],
+        year=2020,
+        doi="10.1000/first",
+    )
+    second = Publication(
+        title="An unrelated result",
+        authors=[Author(name="Zed Smith")],
+        year=2020,
+        doi="10.1000/second",
+    )
+    assert first.citation_key() == second.citation_key() == "Smith2020"
+
+    cache.upsert(first)
+    cache.upsert(second)
+
+    assert cache.stats()["total"] == 2
+    assert cache.get_by_doi("10.1000/first") is not None
+    assert cache.get_by_doi("10.1000/second") is not None
+
+    # Citation-key reads prefer the most recently cached row...
+    hit = cache.get_by_citation_key("Smith2020")
+    assert hit is not None and hit.title == "An unrelated result"
+
+    # ...and an update refreshes cached_at, so re-caching the first
+    # work makes it the preferred row again.
+    cache.upsert(first)
+    hit = cache.get_by_citation_key("Smith2020")
+    assert hit is not None and hit.title == "A theory of everything"
+    assert cache.stats()["total"] == 2
+
+
+def test_upsert_merges_rows_matched_through_different_identifiers(cache: Cache) -> None:
+    """A record bridging two partial rows merges them into one.
+
+    One row known by DOI only, one by arXiv id only; a fully-enriched
+    record carrying both must update one and absorb the other instead
+    of tripping a unique identifier index.
+    """
+    cache.upsert(
+        Publication(
+            title="Attention Is All You Need",
+            authors=[Author(name="Ashish Vaswani")],
+            year=2017,
+            doi="10.5555/3295222",
+        )
+    )
+    cache.upsert(_vaswani())  # arXiv id only
+    assert cache.stats()["total"] == 2
+
+    from dataclasses import replace
+
+    enriched = replace(_vaswani(), doi="10.5555/3295222")
+    cache.upsert(enriched)
+
+    assert cache.stats()["total"] == 1
+    hit = cache.get_by_doi("10.5555/3295222")
+    assert hit is not None
+    assert hit.arxiv_id == "1706.03762"
+
+
+def test_upsert_identifierless_same_title_does_not_duplicate(cache: Cache) -> None:
+    """Identifier-less records dedupe on citation key + exact title."""
+    perceptron = Publication(
+        title="The Perceptron",
+        authors=[Author(name="Frank Rosenblatt")],
+        year=1958,
+    )
+    cache.upsert(perceptron)
+    cache.upsert(perceptron)
+    assert cache.stats()["total"] == 1
+
+
+def test_openalex_lookup_hits_both_query_and_stored_forms(cache: Cache) -> None:
+    """`openalex:` / URL / bare-id queries all hit, against either stored form."""
+    cache.upsert(_chan_vese())  # openalex_id given in full-URL form
+
+    assert cache.get_by_openalex_id("W2148263991") is not None
+    assert cache.lookup("openalex:W2148263991") is not None
+    assert cache.lookup("https://openalex.org/W2148263991") is not None
+    assert cache.lookup("openalex:W0000000") is None
+
+    # Rows written before v3 stored the full-URL form — reads must
+    # still hit those (simulated via a raw insert).
+    cache._conn.execute(
+        "INSERT INTO publications "
+        "(citation_key, openalex_id, title_key, payload_json, cached_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (
+            "Old2019",
+            "https://openalex.org/W999",
+            "an old row",
+            '{"title": "An old row", "authors": []}',
+            "2026-01-01T00:00:00+00:00",
+        ),
+    )
+    cache._conn.commit()
+    assert cache.get_by_openalex_id("W999") is not None
+    assert cache.lookup("openalex:W999") is not None
+
+
 def test_isbn_lookup_round_trip(cache: Cache) -> None:
     """Upsert a book record, retrieve it via either ISBN form."""
     book = Publication(
