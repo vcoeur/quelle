@@ -29,3 +29,9 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Generated agent-harness views — never versioned (and excluded from the sdist:
+# hatchling's default sdist filter only skips gitignored files)
+.claude/
+.kimi/
+.opencode/

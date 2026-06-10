@@ -95,7 +95,10 @@ def _to_publication(message: dict[str, Any]) -> Publication:
 
 
 def _extract_year(message: dict[str, Any]) -> int | None:
-    """Pull the earliest year from Crossref's multi-layer date fields."""
+    """Pull the year from Crossref's multi-layer date fields, taking the
+    first populated one in fixed priority order: published-print, then
+    published-online, issued, created.
+    """
     for key in ("published-print", "published-online", "issued", "created"):
         block = message.get(key)
         if not block:

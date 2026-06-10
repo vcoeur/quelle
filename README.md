@@ -12,7 +12,7 @@ Given a publication identifier (DOI, arXiv id, ISBN-10/13) or a free-text title,
 
 | Source | Role | Rate limit |
 |---|---|---|
-| [OpenAlex](https://docs.openalex.org/) | Primary metadata + OA PDF URL | $1/day on free key |
+| [OpenAlex](https://docs.openalex.org/) | Primary metadata + OA PDF URL | ~100k/day on the polite pool; the keyed tier is credit-metered |
 | [Crossref](https://www.crossref.org/documentation/retrieve-metadata/rest-api/) | DOI-authoritative fallback (abstract, journal block) | polite pool (no hard cap) |
 | [Semantic Scholar](https://api.semanticscholar.org/) | Citation graph + metadata fallback | 5000 / 5 min unauth |
 | [arXiv](https://info.arxiv.org/help/api/) | Preprint metadata + direct PDFs | 1 req / 3s (enforced) |
@@ -108,7 +108,7 @@ quelle owns the CiteKey naming convention but stays decoupled from any vault: yo
 knoten citekeys --json | quelle --json resolve "<input>" --taken-file -
 ```
 
-`--csl` exports a CSL-JSON item instead of the Source. See [`docs/commands.md`](docs/commands.md) for the full `resolve` / `schema` / `skill` reference, and `quelle schema --json` for the authoritative, never-drifting machine contract.
+`--csl` exports a CSL-JSON item instead of the Source. See [`docs/commands.md`](docs/commands.md) for the full `resolve` / `schema` / `skill` reference, and `quelle --json schema` for the authoritative, never-drifting machine contract.
 
 ## Usage
 
@@ -154,7 +154,7 @@ quelle skill install --claude      # -> ~/.claude/skills/quelle/SKILL.md
 quelle skill status                # where it is installed + whether it matches the bundled copy
 ```
 
-Because the skill is bundled with the wheel, it updates in lockstep with the CLI. It documents quelle's CLI contract — `resolve` / `fetch` / `search` / `schema`, the Source shape + `x_vcoeur`, CiteKey minting via `--taken-file`, the `--csl` export, and exit codes — and points readers to `quelle schema --json` as the authoritative contract. It deliberately encodes **no** vault conventions; layer those in a separate skill that references this one. (A minimal standalone example also ships at the repo root in [`SKILL.md`](SKILL.md).)
+Because the skill is bundled with the wheel, it updates in lockstep with the CLI. It documents quelle's CLI contract — `resolve` / `fetch` / `search` / `schema`, the Source shape + `x_vcoeur`, CiteKey minting via `--taken-file`, the `--csl` export, and exit codes — and points readers to `quelle --json schema` as the authoritative contract. It deliberately encodes **no** vault conventions; layer those in a separate skill that references this one. (A minimal standalone example also ships at the repo root in [`SKILL.md`](SKILL.md).)
 
 ## Layout
 
@@ -162,11 +162,12 @@ Because the skill is bundled with the wheel, it updates in lockstep with the CLI
 quelle/
   models/        <- Publication, Author (pure dataclasses)
   repositories/
-    cache.py           <- SQLite cache keyed by DOI / arXiv / title
-    errors.py          <- Error hierarchy -> exit codes 1/2/3/4
+    cache.py           <- SQLite cache; row identity = identifiers (DOI / arXiv / ISBN / OpenAlex id), title as last-resort lookup
+    errors.py          <- Error hierarchy -> exit codes 1/2/3/4 (CLI usage errors exit 64)
     http_client.py     <- httpx + polite User-Agent
     pdf_downloader.py  <- Streaming PDF download with content-type + size checks
-    sources/           <- One module per source: openalex, crossref, semantic_scholar, arxiv, unpaywall
+    sources/           <- One module per source: openalex, crossref, semantic_scholar,
+                          arxiv, unpaywall, open_library, google_books, bnf
   services/
     resolver.py         <- Source orchestration + enrichment chain + cache lookup
     pdf_resolver.py     <- Lazy PDF fallback chain

@@ -9,11 +9,14 @@ install: ## Install dependencies into a uv-managed venv
 dev-install: ## Install dev dependencies too
 	uv sync --all-groups
 
-run: ## Run the quelle CLI (pass args after --, e.g. make run -- config)
-	uv run quelle
+tool-install: ## Install `quelle` globally via `uv tool install` (re-runnable)
+	uv tool install --force .
+
+run: ## Run the quelle CLI (pass args via ARGS, e.g. make run ARGS="config")
+	uv run quelle $(ARGS)
 
 test: ## Run pytest
-	uv run pytest; RET=$$?; if [ $$RET -eq 5 ]; then exit 0; else exit $$RET; fi
+	uv run pytest
 
 coverage: ## Run pytest with line-coverage report
 	uv run pytest --cov=quelle --cov-report=term-missing --cov-report=html
@@ -26,4 +29,4 @@ format: ## Ruff auto-fix + format
 	uv run ruff check --fix .
 	uv run ruff format .
 
-.PHONY: help install dev-install run test coverage lint format
+.PHONY: help install dev-install tool-install run test coverage lint format

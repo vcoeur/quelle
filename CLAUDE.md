@@ -30,6 +30,8 @@ quelle/
   cli/           <- Typer app + config/skill sub-apps + rich/JSON output helpers
   paths.py       <- platformdirs resolution (config / data / cache)
   migrate.py     <- One-shot migration from the legacy config/cache layout
+                    (runs only when the resolved paths are the default
+                    platformdirs targets — env overrides / dev mode skip it)
   settings.py    <- environs config (uses paths.resolve internally)
 ```
 
@@ -65,10 +67,11 @@ The detection is a heuristic (`_looks_like_installed_location` in `paths.py`) �
 
 Implemented in priority order (see `quelle/repositories/sources/`). Each module exports a subset of:
 
-- `search_by_title(client, settings, title) -> Publication`
 - `fetch_by_doi(client, settings, doi) -> Publication` (article sources)
 - `fetch_by_arxiv_id(client, settings, arxiv_id) -> Publication` (arXiv only)
 - `fetch_by_isbn(client, settings, isbn) -> Publication` (book sources: open_library, google_books, openalex, bnf)
+- `search(client, settings, query, *, author, kind, limit) -> list[SearchHit]` (multi-source `quelle search` fan-out)
+- `search_by_title(client, settings, title) -> Publication` (openalex only — the single-source free-text fetch path)
 - `_to_publication(raw) -> Publication` — private mapper, unit-tested without network
 
 Sources never decide the resolution order themselves — the `services/resolver.py` orchestrator does. The resolver inspects the query shape and routes:
@@ -81,10 +84,10 @@ Sources never decide the resolution order themselves — the `services/resolver.
 
 ## Rate-limit discipline
 
-- **Crossref polite pool**: every request must carry `mailto=…` (either as a query param or a `User-Agent: …(mailto:…)` suffix). `build_client` in `quelle/repositories/http_client.py` bakes the User-Agent.
+- **Crossref polite pool**: every request must carry `mailto=…` (either as a query param or a `User-Agent: …(mailto:…)` suffix). `build_client` in `quelle/repositories/http_client.py` bakes the User-Agent; the default is `quelle/<installed version>` (overridable via `QUELLE_USER_AGENT`).
 - **arXiv**: max 1 request / 3 seconds for metadata queries. Static PDF fetches from `arxiv.org/pdf/...` are unbounded.
 - **Unpaywall**: 100 ms delay between requests, 100k / day quota.
-- **OpenAlex**: $1/day quota when authenticated, lower unauth. Don't batch fetch without caching.
+- **OpenAlex**: ~100k requests / day on the polite pool (email set); the key-based tier rolling out since January 2026 meters by daily credits instead. Don't batch fetch without caching.
 - **Open Library** / **BnF**: no documented hard cap; both run on shared / volunteer-funded infrastructure — keep volume reasonable, never run a tight loop.
 - **Google Books**: 1 000 requests / day per IP unauth. `GOOGLE_BOOKS_API_KEY` raises the cap.
 
