@@ -78,7 +78,10 @@ def test_to_publication_skips_nameless_authors() -> None:
     assert [author.name for author in publication.authors] == ["Real Name"]
 
 
-def test_to_publication_without_pdf_sets_oa_false() -> None:
+def test_to_publication_without_pdf_leaves_oa_unknown() -> None:
+    """No openAccessPdf is absence of evidence: a later source must be able
+    to set is_open_access, which a sticky False would block under the merge
+    contract."""
     paper = {
         "paperId": "x",
         "title": "No OA copy",
@@ -86,7 +89,7 @@ def test_to_publication_without_pdf_sets_oa_false() -> None:
     }
     publication = _to_publication(paper)
     assert publication.pdf_url is None
-    assert publication.is_open_access is False
+    assert publication.is_open_access is None
 
 
 # --- Wire-level behaviour --------------------------------------------------

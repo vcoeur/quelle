@@ -166,7 +166,9 @@ def _to_publication(paper: dict[str, Any]) -> Publication:
         semantic_scholar_id=paper.get("paperId"),
         abstract=paper.get("abstract"),
         citation_count=paper.get("citationCount"),
-        is_open_access=bool(pdf_url),
+        # A missing openAccessPdf is absence of evidence, not a closed-access
+        # verdict — False would be sticky under the merge contract.
+        is_open_access=True if pdf_url else None,
         pdf_url=pdf_url,
         source_url=paper.get("url"),
         topics=paper.get("fieldsOfStudy") or [],
