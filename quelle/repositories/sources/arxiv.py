@@ -6,7 +6,7 @@ Free API, no auth. Atom 1.0 responses parsed with stdlib
 **Rate limit:** arXiv asks clients to make no more than one metadata
 request every 3 seconds per:
 https://info.arxiv.org/help/api/user-manual.html . A single module
-level `_LAST_CALL_AT` tracks the previous call and sleeps for the
+level `RateLimiter` tracks the previous call and sleeps for the
 remainder if the caller comes back too soon. Static PDF fetches
 from `arxiv.org/pdf/...` are not subject to this limit and happen
 through the generic PDF downloader.
@@ -14,8 +14,6 @@ through the generic PDF downloader.
 
 from __future__ import annotations
 
-import threading
-import time
 from xml.etree import ElementTree as ET
 
 import httpx
@@ -23,6 +21,8 @@ import httpx
 from quelle.models.publication import Author, Publication
 from quelle.models.search import SearchHit
 from quelle.repositories.errors import NetworkError, NotFoundError
+from quelle.repositories.http_client import get_bytes
+from quelle.repositories.ratelimit import RateLimiter
 from quelle.settings import Settings
 
 QUERY_URL = "https://export.arxiv.org/api/query"
@@ -30,20 +30,7 @@ SOURCE_NAME = "arxiv"
 
 _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
-_MIN_INTERVAL_SECONDS = 3.0
-_LAST_CALL_AT = 0.0
-_RATE_LOCK = threading.Lock()
-
-
-def _rate_limit() -> None:
-    """Sleep just long enough to respect arXiv's 3-second rule."""
-    global _LAST_CALL_AT
-    with _RATE_LOCK:
-        now = time.monotonic()
-        elapsed = now - _LAST_CALL_AT
-        if elapsed < _MIN_INTERVAL_SECONDS:
-            time.sleep(_MIN_INTERVAL_SECONDS - elapsed)
-        _LAST_CALL_AT = time.monotonic()
+_RATE_LIMITER = RateLimiter(min_interval_seconds=3.0)
 
 
 def fetch_by_arxiv_id(client: httpx.Client, settings: Settings, arxiv_id: str) -> Publication:
@@ -54,30 +41,9 @@ def fetch_by_arxiv_id(client: httpx.Client, settings: Settings, arxiv_id: str) -
     """
     del settings  # arXiv requires no auth / config
     bare_id = _strip_version(arxiv_id)
-    _rate_limit()
-    try:
-        response = client.get(QUERY_URL, params={"id_list": bare_id})
-    except httpx.RequestError as exc:
-        raise NetworkError(f"arXiv request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise NetworkError(f"{response.status_code} from arXiv: {response.text[:200]}")
-    return _parse_feed(response.text, expected_id=bare_id)
-
-
-def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Publication:
-    """Return the first arXiv match for a title query."""
-    del settings
-    _rate_limit()
-    try:
-        response = client.get(
-            QUERY_URL,
-            params={"search_query": f"ti:{title}", "max_results": "1"},
-        )
-    except httpx.RequestError as exc:
-        raise NetworkError(f"arXiv request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise NetworkError(f"{response.status_code} from arXiv: {response.text[:200]}")
-    return _parse_feed(response.text)
+    _RATE_LIMITER.wait()
+    body = get_bytes(client, QUERY_URL, params={"id_list": bare_id})
+    return _parse_feed(body, expected_id=bare_id)
 
 
 def search(
@@ -106,20 +72,16 @@ def search(
     if author:
         parts.append(f'au:"{author.replace(chr(34), "").strip()}"')
     search_query = " AND ".join(parts)
-    _rate_limit()
-    try:
-        response = client.get(
-            QUERY_URL,
-            params={"search_query": search_query, "max_results": str(limit)},
-        )
-    except httpx.RequestError as exc:
-        raise NetworkError(f"arXiv request failed: {exc}") from exc
-    if response.status_code >= 400:
-        raise NetworkError(f"{response.status_code} from arXiv: {response.text[:200]}")
-    return _parse_feed_list(response.text)
+    _RATE_LIMITER.wait()
+    body = get_bytes(
+        client,
+        QUERY_URL,
+        params={"search_query": search_query, "max_results": str(limit)},
+    )
+    return _parse_feed_list(body)
 
 
-def _parse_feed_list(body: str) -> list[SearchHit]:
+def _parse_feed_list(body: bytes | str) -> list[SearchHit]:
     """Parse an arXiv Atom feed and return all entries as SearchHits."""
     try:
         root = ET.fromstring(body)
@@ -168,7 +130,7 @@ def _strip_version(arxiv_id: str) -> str:
     return cleaned
 
 
-def _parse_feed(body: str, *, expected_id: str | None = None) -> Publication:
+def _parse_feed(body: bytes | str, *, expected_id: str | None = None) -> Publication:
     """Parse an arXiv Atom feed and return the first entry as a Publication."""
     try:
         root = ET.fromstring(body)
@@ -249,13 +211,4 @@ def _arxiv_id_from_abs_url(url: str) -> str | None:
 
 def _reset_rate_limit_for_tests() -> None:
     """Test hook — clears the last-call timestamp so tests don't pay 3s."""
-    global _LAST_CALL_AT
-    with _RATE_LOCK:
-        _LAST_CALL_AT = 0.0
-
-
-def _set_last_call_for_tests(value: float) -> None:
-    """Test hook — pin the last-call timestamp."""
-    global _LAST_CALL_AT
-    with _RATE_LOCK:
-        _LAST_CALL_AT = value
+    _RATE_LIMITER.reset_for_tests()

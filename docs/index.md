@@ -56,7 +56,7 @@ $ quelle --json fetch 1706.03762 | jq '.title, .authors[].name, .year'
 - **Four lookup keys.** DOI, arXiv id, ISBN-10/13, or free-text title. Pass `--book` / `--article` to bias an ambiguous title query. If you only have a Google Scholar link, paste the paper title instead — Scholar has no API and its ToS prohibits scraping.
 - **SQLite cache.** Keyed by DOI, arXiv id, OpenAlex id, ISBN-10/13, and normalised title — the second query for the same paper is offline. `quelle cache list` / `show` / `clear` inspect and manage it.
 - **PDF download chain.** `--download-pdf` tries OpenAlex → arXiv → Unpaywall in order, with content-type and size validation. arXiv's 1-req-per-3s rate limit and Unpaywall's 100 ms inter-call interval are enforced globally via module-level locks so parallel calls stay polite.
-- **Scriptable.** All commands take `--json`, exit codes map to an error hierarchy (1 user/not-found, 2 network, 3 cache, 4 config), and the whole thing is designed to pipe into notes workflows or reference managers.
+- **Scriptable.** All commands take `--json`, exit codes map to an error hierarchy (1 user/not-found, 2 network, 3 cache, 4 config, 64 CLI usage), and the whole thing is designed to pipe into notes workflows or reference managers.
 
 ## Why quelle
 
@@ -70,8 +70,9 @@ You want to grab a paper's metadata without opening a browser, without a paid AP
 # 1. Resolve the paper.
 quelle --json fetch 10.1109/83.902291 > /tmp/paper.json
 
-# 2. Derive a citation key.
-cite=$(jq -r '.authors[0].family + (.year | tostring)' /tmp/paper.json)
+# 2. Derive a citation key (authors carry a single `name` field;
+#    use `quelle resolve --csl` if you need split family/given names).
+cite=$(jq -r '(.authors[0].name | split(" ") | last) + (.year | tostring)' /tmp/paper.json)
 title=$(jq -r '.title' /tmp/paper.json)
 
 # 3. Create a reference note in the knoten vault.

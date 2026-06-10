@@ -136,7 +136,7 @@ If a single source fails (network error, rate limit), `quelle search` logs a war
 
 ## Cache commands
 
-The cache is a SQLite database keyed by DOI, arXiv id, OpenAlex id, ISBN-10/13, and normalised title. A second query for the same paper is offline.
+The cache is a SQLite database. A row's identity is its identifiers (DOI, arXiv id, ISBN-13/10, OpenAlex id, in that priority order); lookups work by any of those keys or by exact title as a last resort. A second query for the same paper is offline.
 
 ### `quelle cache list`
 
@@ -208,6 +208,7 @@ quelle skill install --project     # -> <cwd>/.agents/skills/quelle/SKILL.md
 quelle skill install --claude      # -> ~/.claude/skills/quelle/SKILL.md
 quelle skill install --dest DIR    # -> DIR/SKILL.md
 quelle skill status                # where it is installed + whether it matches the bundled copy
+quelle --json skill status         # same, as JSON (the root --json flag applies here too)
 ```
 
 The scope flags are mutually exclusive and `--dest` cannot be combined with one. An existing `SKILL.md` is not overwritten unless `--force` is passed. The skill is deliberately **convention-free** — it documents quelle's CLI contract (resolve / fetch / search / schema, the Source shape, CiteKey minting, exit codes), not any particular vault's conventions.
@@ -232,7 +233,7 @@ The locks are global to the process, so a parallel `search` call that fans out t
 
 ## Exit codes
 
-`quelle` maps errors to four exit codes:
+`quelle` maps errors to distinct exit codes:
 
 | Code | Meaning |
 |---|---|
@@ -241,3 +242,4 @@ The locks are global to the process, so a parallel `search` call that fans out t
 | `2` | Network error (timeout, DNS failure, TLS, upstream rate-limit) |
 | `3` | Local cache error (corrupt SQLite file, schema-migration failure) |
 | `4` | Configuration error (missing email, malformed `.env`) |
+| `64` | CLI usage error (unknown flag, missing argument) |

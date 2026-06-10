@@ -5,11 +5,12 @@ httpx client, call the resolver, render the result via
 `quelle.cli.output`.
 
 Exit codes (mapped from exception types in `quelle.repositories.errors`):
-    0 success
-    1 user error / not found
-    2 network error / rate limit
-    3 cache error
-    4 config error
+    0  success
+    1  user error / not found
+    2  network error / rate limit
+    3  cache error
+    4  config error
+    64 CLI usage error (bad flags / arguments — click's domain)
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ import typer
 
 from quelle import __version__
 from quelle.cli._helpers import (
+    EX_USAGE,
     exit_code_for,
     hit_to_dict,
+    load_settings_or_exit,
     load_taken_set,
     looks_like_explicit_id,
     publication_to_csl,
@@ -51,7 +54,18 @@ from quelle.services import search as search_service
 from quelle.services.citekey import base_key, mint
 from quelle.services.resolver import resolve_any, resolve_with_enrichment
 from quelle.services.search import SearchType
-from quelle.settings import Settings, load_settings
+from quelle.settings import Settings
+
+# Click defaults usage errors (bad flags / missing arguments) to exit 2,
+# which collides with our documented "network error" code. Repoint it at
+# EX_USAGE (64) once, before any command runs. typer >= 0.25 vendors its
+# own copy of click; older typer uses the standalone package.
+try:
+    from typer._click.exceptions import UsageError as _ClickUsageError
+except ImportError:  # pragma: no cover — typer < 0.25
+    from click.exceptions import UsageError as _ClickUsageError  # type: ignore[no-redef]
+
+_ClickUsageError.exit_code = EX_USAGE
 
 app = typer.Typer(
     help="Fetch publication metadata and PDFs from open academic APIs.",
@@ -110,7 +124,7 @@ def _root(
 
 
 def _load() -> Settings:
-    return load_settings()
+    return load_settings_or_exit()
 
 
 def _type_hint_or_exit(book: bool, article: bool) -> str | None:
@@ -349,9 +363,10 @@ def cmd_schema(ctx: typer.Context) -> None:
     its flags are introspected from the live app, and the static tables are
     read from the modules that own them, so the output never drifts.
     """
+    from quelle.cli.introspect import command_listing
     from quelle.services.schema import build_schema
 
-    payload = build_schema()
+    payload = build_schema(commands=command_listing(app))
     mode = OutputMode.from_ctx(ctx)
     if mode.json:
         emit_json(payload)
@@ -440,9 +455,13 @@ def cache_list(
     used to print on its own.
     """
     settings = _load()
-    with Cache.open(settings.paths.cache_db) as cache:
-        stats = cache.stats()
-        entries = cache.list_entries(limit=limit)
+    try:
+        with Cache.open(settings.paths.cache_db) as cache:
+            stats = cache.stats()
+            entries = cache.list_entries(limit=limit)
+    except PublicationsError as exc:
+        report_error(exc)
+        raise typer.Exit(exit_code_for(exc)) from exc
     payload = {
         **stats,
         "cache_db": str(settings.paths.cache_db),
@@ -461,8 +480,12 @@ def cache_clear(
         report_error(UserError("pass --yes to confirm cache wipe"))
         raise typer.Exit(1)
     settings = _load()
-    with Cache.open(settings.paths.cache_db) as cache:
-        removed = cache.clear()
+    try:
+        with Cache.open(settings.paths.cache_db) as cache:
+            removed = cache.clear()
+    except PublicationsError as exc:
+        report_error(exc)
+        raise typer.Exit(exit_code_for(exc)) from exc
     render_config({"cleared_rows": removed}, mode=OutputMode.from_ctx(ctx))
 
 
@@ -473,8 +496,12 @@ def cache_show(
 ) -> None:
     """Look up a publication in the cache without hitting the network."""
     settings = _load()
-    with Cache.open(settings.paths.cache_db) as cache:
-        hit = cache.lookup(query)
+    try:
+        with Cache.open(settings.paths.cache_db) as cache:
+            hit = cache.lookup(query)
+    except PublicationsError as exc:
+        report_error(exc)
+        raise typer.Exit(exit_code_for(exc)) from exc
     if hit is None:
         report_error(NotFoundError(f"no cached entry for: {query!r}"))
         raise typer.Exit(1)

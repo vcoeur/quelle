@@ -14,19 +14,42 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
+from urllib.parse import urlsplit
 
 import httpx
 
 from quelle.models.publication import Publication
 from quelle.repositories.http_client import get_text
-from quelle.services.citekey import MEDIA_HOSTS, _host
 from quelle.settings import Settings
 
+# Hosts whose pages are treated as media (video / audio) rather than
+# generic web pages. Host classification lives here, with the URL
+# resolver; the CiteKey module imports it for its media-id rules.
+MEDIA_HOSTS: frozenset[str] = frozenset(
+    {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "youtu.be",
+        "vimeo.com",
+        "www.vimeo.com",
+        "player.vimeo.com",
+        "podcasts.apple.com",
+        "open.spotify.com",
+        "soundcloud.com",
+        "www.soundcloud.com",
+        "twitch.tv",
+        "www.twitch.tv",
+        "dailymotion.com",
+        "www.dailymotion.com",
+    }
+)
+
 # Meta keys, in priority order, that may carry a publication date.
+# Publication-date metas rank above modified-time metas: a page edited
+# yesterday should still be dated by when it was published.
 _DATE_META_KEYS: tuple[str, ...] = (
     "article:published_time",
-    "article:modified_time",
-    "og:updated_time",
     "citation_publication_date",
     "citation_date",
     "dc.date",
@@ -34,9 +57,16 @@ _DATE_META_KEYS: tuple[str, ...] = (
     "date",
     "datepublished",
     "publishdate",
+    "article:modified_time",
+    "og:updated_time",
 )
 
 _YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def host_of(url: str) -> str:
+    """Lower-cased hostname of `url` (no port), or `""`."""
+    return (urlsplit(url).hostname or "").lower()
 
 
 class _MetaExtractor(HTMLParser):
@@ -106,7 +136,7 @@ def resolve_url(client: httpx.Client, settings: Settings, url: str) -> Publicati
 
 def _is_media(url: str, og_type: str) -> bool:
     """True when the host is a known media host or `og:type` is video/audio."""
-    if _host(url) in MEDIA_HOSTS:
+    if host_of(url) in MEDIA_HOSTS:
         return True
     return og_type.startswith(("video", "music")) or "audio" in og_type
 

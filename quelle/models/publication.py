@@ -13,6 +13,8 @@ are omitted from rendering rather than gating logic on `kind`.
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass, field, fields, replace
 from typing import Any, Literal
 
@@ -52,6 +54,28 @@ _KIND_PRIORITY: dict[str, int] = {
     "article": 1,
     "preprint": 1,
 }
+
+
+def _surname_key_part(name: str) -> str:
+    """Filename-safe key part from an author name's last word.
+
+    Takes the last whitespace-separated word (so particles survive:
+    `"Ferdinand de Saussure"` → `"Saussure"`), accent-folds it to ASCII
+    (NFKD, combining marks stripped), and drops every remaining
+    character outside `[A-Za-z0-9]`. Upstream author names are a trust
+    boundary — `/`, `..`, and friends must never reach a key that is
+    later used as a PDF filename. Returns `""` when nothing usable
+    remains; callers treat that author as unusable.
+
+    Implemented self-contained (stdlib only): the models layer imports
+    nothing from the rest of the project.
+    """
+    words = name.split()
+    if not words:
+        return ""
+    decomposed = unicodedata.normalize("NFKD", words[-1])
+    folded = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+    return re.sub(r"[^A-Za-z0-9]", "", folded)
 
 
 def _is_missing(value: Any) -> bool:
@@ -124,26 +148,31 @@ class Publication:
         return self.resolved_from_chain[0] if self.resolved_from_chain else "unknown"
 
     def citation_key(self) -> str:
-        """Short BibTeX-style key.
+        """Short BibTeX-style key — the *authored* branch of the CiteKey
+        convention owned by `quelle.services.citekey` (its `base_key`
+        delegates here for authored works).
 
         - Single author: `LastnameYear` (e.g. `Rosenblatt1958`)
         - Two authors: `Last1Last2Year` (e.g. `KahnemanTversky1972`)
         - Three or more: `LastnameAlYear` (e.g. `CasellesAl1997`)
 
-        Falls back to `Unknown` / `ND` for missing author / year.
+        Author names are accent-folded and sanitised to `[A-Za-z0-9]`
+        (`François Récanati` → `Recanati2020`); names that yield no
+        usable characters (whitespace-only, punctuation-only) are
+        skipped. Falls back to `Unknown` / `ND` for missing usable
+        author / year, so the result always matches `^[A-Za-z0-9]+$`.
         """
         year = str(self.year) if self.year else "ND"
-        if not self.authors or not self.authors[0].name:
+        parts = [
+            part for part in (_surname_key_part(author.name) for author in self.authors) if part
+        ]
+        if not parts:
             return f"Unknown{year}"
-
-        def _last(name: str) -> str:
-            return name.split()[-1].replace("-", "")
-
-        if len(self.authors) == 1:
-            return f"{_last(self.authors[0].name)}{year}"
-        if len(self.authors) == 2:
-            return f"{_last(self.authors[0].name)}{_last(self.authors[1].name)}{year}"
-        return f"{_last(self.authors[0].name)}Al{year}"
+        if len(parts) == 1:
+            return f"{parts[0]}{year}"
+        if len(parts) == 2:
+            return f"{parts[0]}{parts[1]}{year}"
+        return f"{parts[0]}Al{year}"
 
     def merged_with(self, other: Publication) -> Publication:
         """Return a new Publication that fills `None` / `[]` gaps from `other`.

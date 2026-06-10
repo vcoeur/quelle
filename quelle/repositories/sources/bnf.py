@@ -26,7 +26,7 @@ from quelle._isbn import isbn_forms
 from quelle.models.publication import Author, Publication
 from quelle.models.search import SearchHit
 from quelle.repositories.errors import NetworkError, NotFoundError
-from quelle.repositories.http_client import get_text
+from quelle.repositories.http_client import get_bytes
 from quelle.settings import Settings
 
 SRU_URL = "https://catalogue.bnf.fr/api/SRU"
@@ -70,17 +70,6 @@ def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Public
     return publication
 
 
-def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Publication:
-    """Return the top BnF match for a title query."""
-    del settings
-    escaped = title.replace('"', "")
-    return _query(
-        client,
-        f'bib.title adj "{escaped}"',
-        not_found=f"no BnF match for title: {title!r}",
-    )
-
-
 def search(
     client: httpx.Client,
     settings: Settings,
@@ -109,11 +98,11 @@ def search(
         "recordSchema": "dublincore",
         "maximumRecords": str(limit),
     }
-    body = get_text(client, SRU_URL, params=params)
+    body = get_bytes(client, SRU_URL, params=params)
     return _records_to_search_hits(body)
 
 
-def _records_to_search_hits(body: str) -> list[SearchHit]:
+def _records_to_search_hits(body: bytes) -> list[SearchHit]:
     """Parse the SRU envelope and return all DC records as SearchHits."""
     try:
         root = ET.fromstring(body)
@@ -167,12 +156,12 @@ def _query(client: httpx.Client, cql: str, *, not_found: str) -> Publication:
         "recordSchema": "dublincore",
         "maximumRecords": "1",
     }
-    body = get_text(client, SRU_URL, params=params)
+    body = get_bytes(client, SRU_URL, params=params)
     record = _first_record(body, not_found_msg=not_found)
     return _to_publication(record)
 
 
-def _first_record(body: str, *, not_found_msg: str) -> dict[str, Any]:
+def _first_record(body: bytes | str, *, not_found_msg: str) -> dict[str, Any]:
     """Parse the SRU envelope and return the first DC record as a flat dict.
 
     The DC schema permits multiple values per element name (multiple
@@ -190,14 +179,7 @@ def _first_record(body: str, *, not_found_msg: str) -> dict[str, Any]:
     if record is None:
         raise NotFoundError(not_found_msg)
 
-    fields: dict[str, list[str]] = {}
-    for child in record:
-        tag = child.tag.split("}", 1)[1] if "}" in child.tag else child.tag
-        text = (child.text or "").strip()
-        if not text:
-            continue
-        fields.setdefault(tag, []).append(text)
-    return fields
+    return _record_fields(record)
 
 
 def _to_publication(record: dict[str, list[str]]) -> Publication:

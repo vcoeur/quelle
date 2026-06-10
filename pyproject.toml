@@ -21,6 +21,8 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering",
     "Topic :: Text Processing :: Markup",
 ]
@@ -41,6 +43,17 @@ build-backend = "hatchling.build"
 # Version is derived from the git tag (vX.Y.Z) at build time — never committed.
 [tool.hatch.version]
 source = "vcs"
+
+# Belt-and-braces with .gitignore: hatchling's default sdist filter only skips
+# gitignored files, so untracked local agent-harness dirs would leak into the
+# sdist without an explicit exclude.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    ".claude",
+    ".kimi",
+    ".opencode",
+    ".dev-state",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["quelle"]

@@ -5,17 +5,15 @@ No key required for low-volume reads (1k requests/day per IP), but
 an optional `GOOGLE_BOOKS_API_KEY` is honoured for higher quotas.
 Schema: https://developers.google.com/books/docs/v1/reference/volumes
 
-A module-level lock enforces a 100 ms minimum interval between calls
-(~10 req/s, well inside the 1k/day default cap when the cap is
-spread across the day). This keeps a tight loop of `quelle search`
-calls polite without callers having to sleep manually. Same pattern
-as `arxiv.py` and `unpaywall.py`.
+A module-level `RateLimiter` enforces a 100 ms minimum interval
+between calls (~10 req/s, well inside the 1k/day default cap when the
+cap is spread across the day). This keeps a tight loop of
+`quelle search` calls polite without callers having to sleep manually.
+Same pattern as `arxiv.py` and `unpaywall.py`.
 """
 
 from __future__ import annotations
 
-import threading
-import time
 from typing import Any
 
 import httpx
@@ -24,32 +22,18 @@ from quelle.models.publication import Author, Publication
 from quelle.models.search import SearchHit
 from quelle.repositories.errors import NotFoundError
 from quelle.repositories.http_client import get_json
+from quelle.repositories.ratelimit import RateLimiter
 from quelle.settings import Settings
 
 VOLUMES_URL = "https://www.googleapis.com/books/v1/volumes"
 SOURCE_NAME = "google_books"
 
-_MIN_INTERVAL_SECONDS = 0.1
-_LAST_CALL_AT = 0.0
-_RATE_LOCK = threading.Lock()
-
-
-def _rate_limit() -> None:
-    """Sleep just long enough to respect Google Books' polite cadence."""
-    global _LAST_CALL_AT
-    with _RATE_LOCK:
-        now = time.monotonic()
-        elapsed = now - _LAST_CALL_AT
-        if elapsed < _MIN_INTERVAL_SECONDS:
-            time.sleep(_MIN_INTERVAL_SECONDS - elapsed)
-        _LAST_CALL_AT = time.monotonic()
+_RATE_LIMITER = RateLimiter(min_interval_seconds=0.1)
 
 
 def _reset_rate_limit_for_tests() -> None:
     """Test hook — clears the last-call timestamp so tests don't pay 100 ms."""
-    global _LAST_CALL_AT
-    with _RATE_LOCK:
-        _LAST_CALL_AT = 0.0
+    _RATE_LIMITER.reset_for_tests()
 
 
 def _auth_params(settings: Settings) -> dict[str, str]:
@@ -74,22 +58,11 @@ def _escape_query(value: str) -> str:
 def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Publication:
     """Return the top Google Books volume for a specific ISBN."""
     params = {"q": f"isbn:{isbn}", "maxResults": "1", **_auth_params(settings)}
-    _rate_limit()
+    _RATE_LIMITER.wait()
     payload = get_json(client, VOLUMES_URL, params=params)
     items = payload.get("items") or []
     if not items:
         raise NotFoundError(f"no Google Books volume for ISBN: {isbn}")
-    return _to_publication(items[0])
-
-
-def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Publication:
-    """Return the top Google Books volume for a free-text title query."""
-    params = {"q": f"intitle:{_escape_query(title)}", "maxResults": "1", **_auth_params(settings)}
-    _rate_limit()
-    payload = get_json(client, VOLUMES_URL, params=params)
-    items = payload.get("items") or []
-    if not items:
-        raise NotFoundError(f"no Google Books match for title: {title!r}")
     return _to_publication(items[0])
 
 
@@ -118,7 +91,7 @@ def search(
     if author:
         parts.append(f"inauthor:{_escape_query(author)}")
     params = {"q": " ".join(parts), "maxResults": str(limit), **_auth_params(settings)}
-    _rate_limit()
+    _RATE_LIMITER.wait()
     payload = get_json(client, VOLUMES_URL, params=params)
     items = payload.get("items") or []
     return [_to_search_hit(item, rank) for rank, item in enumerate(items)]

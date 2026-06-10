@@ -13,10 +13,12 @@ Two layers:
   already taken in the destination vault, appending a lowercase suffix
   (`a`, `b`, …, `z`, `aa`, …) until free.
 
-Authored works delegate to `Publication.citation_key()` (the existing
-BibTeX rule). Authorless web/media/PDF sources get site/channel/title
-rules, falling back to a deterministic domain+date key so a key is
-always produced.
+Authored works delegate to `Publication.citation_key()` — the authored
+branch of the convention is *derived there*, in the model (accent
+folding, `[A-Za-z0-9]` sanitisation, unusable-name skipping included),
+because the models layer cannot import this module. Authorless
+web/media/PDF sources get site/channel/title rules, falling back to a
+deterministic domain+date key so a key is always produced.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
 from quelle.models.publication import Publication
+from quelle.services.url_resolver import host_of
 
 # quelle `kind` → knoten vault kind. Consumed by `x_vcoeur.vault_kind`.
 # None / unknown collapses to "document".
@@ -40,28 +43,6 @@ KIND_MAP: dict[str, str] = {
     "web": "web",
     "media": "media",
 }
-
-# Hosts whose pages are treated as media (video / audio) rather than
-# generic web pages. Used by the URL resolver too, re-exported there.
-MEDIA_HOSTS: frozenset[str] = frozenset(
-    {
-        "youtube.com",
-        "www.youtube.com",
-        "m.youtube.com",
-        "youtu.be",
-        "vimeo.com",
-        "www.vimeo.com",
-        "player.vimeo.com",
-        "podcasts.apple.com",
-        "open.spotify.com",
-        "soundcloud.com",
-        "www.soundcloud.com",
-        "twitch.tv",
-        "www.twitch.tv",
-        "dailymotion.com",
-        "www.dailymotion.com",
-    }
-)
 
 
 def vault_kind(kind: str | None) -> str:
@@ -79,8 +60,9 @@ def base_key(pub: Publication) -> str:
 
     Branches by source shape:
 
-    - **Authored** (a usable first-author name): the existing BibTeX
-      rule via `pub.citation_key()`.
+    - **Authored** (any usable author name): delegates to
+      `pub.citation_key()`, where the authored branch of the
+      convention (BibTeX rule + folding/sanitisation) lives.
     - **web** (`kind == "web"`, no author): `SiteNameYYYY[-ref]`.
     - **media** (`kind == "media"`, no author): `ChannelYYYY[-id]`.
     - **other authorless** (article/book/PDF with a title): a
@@ -126,8 +108,13 @@ def _suffixes():
 
 
 def _has_usable_author(pub: Publication) -> bool:
-    """True when the first author carries a non-empty name."""
-    return bool(pub.authors and pub.authors[0].name and pub.authors[0].name.strip())
+    """True when any author carries a non-whitespace name.
+
+    Mirrors `Publication.citation_key()`, which skips unusable names —
+    so the authored branch is taken exactly when the model can derive
+    an authored key.
+    """
+    return any(author.name and author.name.strip() for author in pub.authors)
 
 
 def _retrieval_year() -> str:
@@ -162,7 +149,7 @@ def _web_key(pub: Publication) -> str:
     year = _year_or_retrieval(pub)
     url = pub.source_url
 
-    if url and _host(url) in {"github.com", "www.github.com"}:
+    if url and host_of(url) in {"github.com", "www.github.com"}:
         org_repo = _github_org_repo(url)
         if org_repo:
             org, repo = org_repo
@@ -225,7 +212,7 @@ def _last_resort(pub: Publication) -> str:
     """
     date = datetime.now().strftime("%Y%m%d")
     if pub.source_url:
-        host = _strip_www(_host(pub.source_url))
+        host = _strip_www(host_of(pub.source_url))
         if host:
             return f"{_camel(host)}{date}"
     if pub.title:
@@ -270,11 +257,6 @@ def _alnum(text: str, *, cap: int = 24) -> str:
     return cleaned[:cap]
 
 
-def _host(url: str) -> str:
-    """Lower-cased hostname (no port), or `""`."""
-    return (urlsplit(url).hostname or "").lower()
-
-
 def _strip_www(host: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
@@ -287,7 +269,7 @@ def _domain_label(url: str) -> str:
     `example`). Two-part ccTLDs (e.g. `example.co.uk`) are handled
     imperfectly — the rule returns `co` there. (not verified)
     """
-    host = _strip_www(_host(url))
+    host = _strip_www(host_of(url))
     if not host:
         return ""
     labels = host.split(".")
@@ -320,7 +302,7 @@ def _media_id(url: str) -> str | None:
 
     YouTube `?v=`, `youtu.be/<id>`, else the last path segment.
     """
-    host = _host(url)
+    host = host_of(url)
     parts = urlsplit(url)
     if "youtube.com" in host:
         values = parse_qs(parts.query).get("v")

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import time
 
+import httpx
 import pytest
 
-from quelle.repositories.errors import NotFoundError
+from quelle.repositories import ratelimit
+from quelle.repositories.errors import NotFoundError, RateLimitError
 from quelle.repositories.sources import arxiv
 from quelle.repositories.sources.arxiv import (
     _arxiv_id_from_abs_url,
@@ -101,18 +103,56 @@ def test_rate_limit_sleeps_when_called_back_to_back(monkeypatch: pytest.MonkeyPa
     def fake_sleep(seconds: float) -> None:
         slept.append(seconds)
 
-    monkeypatch.setattr(arxiv.time, "sleep", fake_sleep)
+    monkeypatch.setattr(ratelimit.time, "sleep", fake_sleep)
 
     start = time.monotonic()
-    arxiv._set_last_call_for_tests(start)
-    arxiv._rate_limit()  # second call, same timestamp -> should sleep ~3s
+    arxiv._RATE_LIMITER.set_last_call_for_tests(start)
+    arxiv._RATE_LIMITER.wait()  # second call, same timestamp -> should sleep ~3s
     assert slept and slept[0] >= 2.9
 
 
 def test_rate_limit_does_not_sleep_on_first_call(monkeypatch: pytest.MonkeyPatch) -> None:
     arxiv._reset_rate_limit_for_tests()
     slept: list[float] = []
-    monkeypatch.setattr(arxiv.time, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(ratelimit.time, "sleep", lambda s: slept.append(s))
 
-    arxiv._rate_limit()
+    arxiv._RATE_LIMITER.wait()
     assert slept == []
+
+
+def test_fetch_by_arxiv_id_maps_429_to_rate_limit_error(httpx_mock) -> None:
+    """The 429 mapping comes from the shared http_client helper now —
+    the previous inline `client.get` calls collapsed 429 into NetworkError."""
+    arxiv._reset_rate_limit_for_tests()
+    httpx_mock.add_response(status_code=429, text="slow down")
+    client = httpx.Client()
+    try:
+        with pytest.raises(RateLimitError):
+            arxiv.fetch_by_arxiv_id(client, None, "1706.03762")
+    finally:
+        client.close()
+
+
+def test_fetch_by_arxiv_id_parses_xml_declared_charset(httpx_mock) -> None:
+    """The Atom body is parsed from bytes, so ElementTree honours the XML
+    declaration's charset even when it disagrees with httpx's default."""
+    arxiv._reset_rate_limit_for_tests()
+    body = (
+        "<?xml version='1.0' encoding='ISO-8859-1'?>\n"
+        '<feed xmlns="http://www.w3.org/2005/Atom">\n'
+        "  <entry>\n"
+        "    <id>http://arxiv.org/abs/1234.56789v1</id>\n"
+        "    <published>2020-01-01T00:00:00Z</published>\n"
+        "    <title>Modèles génératifs</title>\n"
+        "    <author><name>Hélène Bouvier</name></author>\n"
+        "  </entry>\n"
+        "</feed>\n"
+    ).encode("iso-8859-1")
+    httpx_mock.add_response(content=body, headers={"content-type": "application/atom+xml"})
+    client = httpx.Client()
+    try:
+        publication = arxiv.fetch_by_arxiv_id(client, None, "1234.56789")
+    finally:
+        client.close()
+    assert publication.title == "Modèles génératifs"
+    assert publication.authors[0].name == "Hélène Bouvier"

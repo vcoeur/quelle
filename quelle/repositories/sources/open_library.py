@@ -43,20 +43,12 @@ def fetch_by_isbn(client: httpx.Client, settings: Settings, isbn: str) -> Public
     try:
         edition = get_json(client, url)
     except NetworkError as exc:
-        if "404" in str(exc):
+        # Branch on the structured status, not the message text — the URL
+        # itself can contain "404" (e.g. Kadokawa ISBNs, 978-4-04…).
+        if exc.status_code == 404:
             raise NotFoundError(f"no Open Library edition for ISBN: {isbn}") from exc
         raise
     return _build_publication(client, settings, edition)
-
-
-def search_by_title(client: httpx.Client, settings: Settings, title: str) -> Publication:
-    """Return the top Open Library match for a free-text title."""
-    url = f"{BASE_URL}/search.json"
-    payload = get_json(client, url, params={"title": title, "limit": "1"})
-    docs = payload.get("docs") or []
-    if not docs:
-        raise NotFoundError(f"no Open Library match for title: {title!r}")
-    return _doc_to_publication(docs[0])
 
 
 def search(
@@ -179,33 +171,6 @@ def _to_publication(
         subjects=subjects,
         abstract=abstract,
         source_url=f"{BASE_URL}{edition['key']}" if edition.get("key") else None,
-        resolved_from_chain=["open_library"],
-    )
-
-
-def _doc_to_publication(doc: dict[str, Any]) -> Publication:
-    """Map a `search.json` doc (search-index shape, lighter than an edition)."""
-    isbn_list = doc.get("isbn") or []
-    isbn_10 = next((value for value in isbn_list if len(value) == 10), None)
-    isbn_13 = next((value for value in isbn_list if len(value) == 13), None)
-
-    publishers = doc.get("publisher") or []
-    publisher = publishers[0] if publishers else None
-
-    authors = [Author(name=name) for name in doc.get("author_name") or [] if name]
-    subjects = list(doc.get("subject") or [])
-
-    return Publication(
-        title=doc.get("title") or "",
-        authors=authors,
-        year=doc.get("first_publish_year"),
-        publisher=publisher,
-        isbn_10=isbn_10,
-        isbn_13=isbn_13,
-        page_count=doc.get("number_of_pages_median"),
-        kind="book",
-        subjects=subjects,
-        source_url=f"{BASE_URL}{doc['key']}" if doc.get("key") else None,
         resolved_from_chain=["open_library"],
     )
 

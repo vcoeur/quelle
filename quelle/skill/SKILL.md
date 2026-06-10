@@ -5,7 +5,7 @@ argument-hint: "<DOI | arXiv id | ISBN | title | URL | path/to.pdf>"
 allowed-tools: Read, Bash(quelle:*), Bash(knoten:*), Bash(python3:*), Bash(jq:*), Bash(command -v quelle:*)
 ---
 
-Thin, **convention-free** wrapper around the [`quelle`](https://github.com/vcoeur/quelle) CLI. It encodes how to drive the tool *correctly* — JSON parsing, routing, CiteKey minting, error handling. It encodes **no vault conventions** (which notes get created, where, with what frontmatter). Those belong in a separate, user-specific skill (e.g. the private `/kasten` skill) that references this one. The authoritative, never-drifting contract is `quelle schema --json`.
+Thin, **convention-free** wrapper around the [`quelle`](https://github.com/vcoeur/quelle) CLI. It encodes how to drive the tool *correctly* — JSON parsing, routing, CiteKey minting, error handling. It encodes **no vault conventions** (which notes get created, where, with what frontmatter). Those belong in a separate, user-specific skill (e.g. the private `/kasten` skill) that references this one. The authoritative, never-drifting contract is `quelle --json schema`.
 
 ## Use at your own risk
 
@@ -31,12 +31,12 @@ First invocation creates the config / data / cache dirs. Set `QUELLE_CONTACT_EMA
 quelle --json resolve "<input>"
 ```
 
-`--json` is a **root** flag — it goes before the subcommand, not after. The JSON shape is the stable, parseable contract; the TTY rendering is for humans. Parse with `jq` or `python3`.
+`--json` is a **root** flag — it goes before the subcommand, not after. It applies to every subcommand, including `skill` and `cache`. The JSON shape is the stable, parseable contract; the TTY rendering is for humans. Parse with `jq` or `python3`.
 
-## 3 — Discover the contract: `quelle schema --json`
+## 3 — Discover the contract: `quelle --json schema`
 
 ```bash
-quelle schema --json
+quelle --json schema
 ```
 
 Returns every command + its flags, the Source field list + types, the `x_vcoeur` block, a summary of the CiteKey convention, the quelle→knoten kind map, and the exit codes. Read it once to self-orient; do not hard-code the surface from this file.
@@ -120,6 +120,7 @@ On failure, a structured error goes to **stderr** and the process exits non-zero
 | 2 | Network error / upstream rate limit |
 | 3 | Local cache error |
 | 4 | Configuration error |
+| 64 | CLI usage error (unknown flag or missing argument) |
 
 Branch on the exit code, not on the message text. Google Scholar URLs are unsupported (code 1) — copy the title and retry as free text.
 
@@ -135,5 +136,3 @@ quelle skill status                # where it's installed + whether it matches t
 ```
 
 To add vault conventions (where notes go, frontmatter, ingest flow), fork into a **separate** skill that references this one for mechanics — keep this file convention-free so it updates cleanly with the tool.
-
-$ARGUMENTS

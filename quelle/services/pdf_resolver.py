@@ -8,6 +8,7 @@ first success. On total failure, returns a `PdfOutcome` with
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -15,9 +16,10 @@ from pathlib import Path
 import httpx
 
 from quelle.models.publication import Publication
-from quelle.repositories.errors import NetworkError, UserError
+from quelle.repositories.errors import NetworkError, RateLimitError, UserError
 from quelle.repositories.pdf_downloader import download_pdf
 from quelle.repositories.sources import unpaywall
+from quelle.services import citekey
 from quelle.settings import Settings
 
 
@@ -42,8 +44,7 @@ def resolve_and_download(
     OpenAlex `pdf_url` already succeeds, because Unpaywall is itself
     a network call.
     """
-    citation_key = publication.citation_key()
-    dest_path = dest_dir / f"{citation_key}.pdf"
+    dest_path = dest_dir / _pdf_filename(publication)
     outcome = PdfOutcome(local_path=None)
     seen: set[str] = set()
 
@@ -73,6 +74,21 @@ def resolve_and_download(
     if not outcome.sources_tried:
         outcome.reason_if_none = "no_oa_copy"
     return outcome
+
+
+def _pdf_filename(publication: Publication) -> str:
+    """Destination filename for a Publication's PDF: `<CiteKey>.pdf`.
+
+    The key comes from `citekey.base_key` (the convention owner), not
+    raw `publication.citation_key()`, so authorless web/media sources
+    get their site/channel key instead of `UnknownND`. A final
+    defensive pass strips path separators and NULs — the filename is
+    joined onto the destination directory, so a traversal-carrying key
+    must never reach it even if a future key branch regresses.
+    """
+    key = citekey.base_key(publication)
+    safe_key = re.sub(r"[\\/\x00]", "", key)
+    return f"{safe_key or 'Source'}.pdf"
 
 
 # Number of bytes scanned for an embedded metadata dictionary. The Info
@@ -133,10 +149,7 @@ def _extract_pdf_metadata(path: Path) -> tuple[str | None, int | None]:
     title: str | None = None
     title_match = _PDF_TITLE_RE.search(head)
     if title_match:
-        raw = title_match.group(1)
-        decoded = raw.replace(rb"\(", b"(").replace(rb"\)", b")")
-        text = decoded.decode("latin-1", errors="replace").strip()
-        title = text or None
+        title = _decode_pdf_text(title_match.group(1))
 
     year: int | None = None
     creation_match = _PDF_CREATION_RE.search(head)
@@ -146,12 +159,32 @@ def _extract_pdf_metadata(path: Path) -> tuple[str | None, int | None]:
     return title, year
 
 
+def _decode_pdf_text(raw: bytes) -> str | None:
+    """Decode a PDF literal-string value into clean text, or `None`.
+
+    Resolves the common escapes (`\\\\`, `\\(`, `\\)`), then decodes:
+    a UTF-16 BOM (`\\xFE\\xFF` / `\\xFF\\xFE` — common for `/Title`)
+    selects UTF-16, anything else falls back to latin-1. Control
+    characters (including NULs, which UTF-16 mojibake used to embed)
+    are stripped; a title that is empty after cleaning is `None`.
+    """
+    unescaped = re.sub(rb"\\([\\()])", rb"\1", raw)
+    if unescaped.startswith((b"\xfe\xff", b"\xff\xfe")):
+        text = unescaped.decode("utf-16", errors="replace")
+    else:
+        text = unescaped.decode("latin-1", errors="replace")
+    cleaned = "".join(ch for ch in text if unicodedata.category(ch) != "Cc").strip()
+    return cleaned or None
+
+
 def _unpaywall_pdf_url(client: httpx.Client, settings: Settings, doi: str) -> str | None:
     """Look up a DOI in Unpaywall and return the best OA PDF URL, if any."""
     if not settings.unpaywall_email and not settings.contact_email:
         return None
     try:
         payload = unpaywall.lookup_by_doi(client, settings, doi)
-    except Exception:  # noqa: BLE001
+    except RateLimitError:
+        raise
+    except NetworkError:
         return None
     return unpaywall.extract_pdf_url(payload)

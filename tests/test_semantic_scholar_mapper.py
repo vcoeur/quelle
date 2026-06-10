@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
-from quelle.repositories.errors import NotFoundError
+from quelle.repositories.errors import NetworkError, NotFoundError
+from quelle.repositories.sources import semantic_scholar
 from quelle.repositories.sources.semantic_scholar import _to_publication
 
 
@@ -66,7 +68,20 @@ def test_to_publication_raises_on_empty_payload() -> None:
         _to_publication({})
 
 
-def test_to_publication_without_pdf_sets_oa_false() -> None:
+def test_to_publication_skips_nameless_authors() -> None:
+    paper = {
+        "paperId": "x",
+        "title": "T",
+        "authors": [{"name": ""}, {}, {"name": "Real Name"}],
+    }
+    publication = _to_publication(paper)
+    assert [author.name for author in publication.authors] == ["Real Name"]
+
+
+def test_to_publication_without_pdf_leaves_oa_unknown() -> None:
+    """No openAccessPdf is absence of evidence: a later source must be able
+    to set is_open_access, which a sticky False would block under the merge
+    contract."""
     paper = {
         "paperId": "x",
         "title": "No OA copy",
@@ -74,4 +89,63 @@ def test_to_publication_without_pdf_sets_oa_false() -> None:
     }
     publication = _to_publication(paper)
     assert publication.pdf_url is None
-    assert publication.is_open_access is False
+    assert publication.is_open_access is None
+
+
+# --- Wire-level behaviour --------------------------------------------------
+
+
+def test_fetch_by_doi_sends_api_key_header_when_set(httpx_mock, tmp_settings) -> None:
+    """SEMANTIC_SCHOLAR_API_KEY must actually reach the wire as `x-api-key`."""
+    from dataclasses import replace
+
+    settings = replace(tmp_settings, semantic_scholar_api_key="sekrit")
+    httpx_mock.add_response(json=_yang_paper(), match_headers={"x-api-key": "sekrit"})
+    with httpx.Client() as client:
+        publication = semantic_scholar.fetch_by_doi(
+            client, settings, "10.1016/j.neucom.2022.02.079"
+        )
+    assert publication.title.startswith("An overview")
+
+
+def test_fetch_by_doi_omits_api_key_header_when_unset(httpx_mock, tmp_settings) -> None:
+    httpx_mock.add_response(json=_yang_paper())
+    with httpx.Client() as client:
+        semantic_scholar.fetch_by_doi(client, tmp_settings, "10.1016/j.neucom.2022.02.079")
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert "x-api-key" not in request.headers
+
+
+def test_search_sends_api_key_header_when_set(httpx_mock, tmp_settings) -> None:
+    from dataclasses import replace
+
+    settings = replace(tmp_settings, semantic_scholar_api_key="sekrit")
+    httpx_mock.add_response(json={"data": []}, match_headers={"x-api-key": "sekrit"})
+    with httpx.Client() as client:
+        assert semantic_scholar.search(client, settings, "edge detection") == []
+
+
+def test_fetch_by_doi_maps_404_to_not_found(httpx_mock, tmp_settings) -> None:
+    """An unknown DOI is a not-found (exit 1), not a network failure (exit 2)."""
+    httpx_mock.add_response(status_code=404, text="Paper not found")
+    with httpx.Client() as client, pytest.raises(NotFoundError, match="10.1234/missing"):
+        semantic_scholar.fetch_by_doi(client, tmp_settings, "10.1234/missing")
+
+
+def test_fetch_by_doi_propagates_non_404_network_errors(httpx_mock, tmp_settings) -> None:
+    """A 5xx is a network failure (exit 2), not a not-found (exit 1)."""
+    httpx_mock.add_response(status_code=503, text="upstream down")
+    with httpx.Client() as client, pytest.raises(NetworkError) as excinfo:
+        semantic_scholar.fetch_by_doi(client, tmp_settings, "10.1/flaky")
+    assert excinfo.value.status_code == 503
+
+
+def test_fetch_by_doi_percent_encodes_doi(httpx_mock, tmp_settings) -> None:
+    """`?` / `#` in a DOI must not truncate the path or inject query params."""
+    httpx_mock.add_response(json=_yang_paper())
+    with httpx.Client() as client:
+        semantic_scholar.fetch_by_doi(client, tmp_settings, "10.1000/weird?x#y")
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert "10.1000/weird%3Fx%23y" in str(request.url)

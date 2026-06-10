@@ -86,6 +86,20 @@ def test_open_library_fetch_by_isbn_maps_404_to_not_found(
         open_library.fetch_by_isbn(client, tmp_settings, "9999999999999")
 
 
+def test_open_library_5xx_with_404_in_isbn_stays_network_error(
+    httpx_mock: HTTPXMock, client: httpx.Client, tmp_settings: Settings
+) -> None:
+    """Regression: 404 detection used to match the message text, so a 503
+    on a Kadokawa ISBN (978-4-04…) was misreported as NotFoundError."""
+    httpx_mock.add_response(
+        url="https://openlibrary.org/isbn/9784041026221.json",
+        status_code=503,
+        text="upstream sad",
+    )
+    with pytest.raises(NetworkError):
+        open_library.fetch_by_isbn(client, tmp_settings, "9784041026221")
+
+
 def test_open_library_swallows_failed_secondary_fetches(
     httpx_mock: HTTPXMock, client: httpx.Client, tmp_settings: Settings
 ) -> None:
@@ -328,6 +342,31 @@ def test_bnf_fetch_by_isbn_zero_records_raises_not_found(
     )
     with pytest.raises(NotFoundError):
         bnf.fetch_by_isbn(client, tmp_settings, "9999999999999")
+
+
+def test_bnf_parses_xml_declared_charset_from_bytes(
+    httpx_mock: HTTPXMock, client: httpx.Client, tmp_settings: Settings
+) -> None:
+    """The SRU body is parsed from bytes so ElementTree honours the XML
+    declaration's charset — an ISO-8859-1 payload must not mojibake."""
+    body = (
+        '<?xml version="1.0" encoding="ISO-8859-1"?>\n'
+        '<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">\n'
+        "  <srw:records><srw:record><srw:recordData>\n"
+        '    <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"\n'
+        '               xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        "      <dc:title>L'Été</dc:title>\n"
+        "      <dc:creator>Camus, Albert</dc:creator>\n"
+        "      <dc:identifier>ISBN 9782070373284</dc:identifier>\n"
+        "    </oai_dc:dc>\n"
+        "  </srw:recordData></srw:record></srw:records>\n"
+        "</srw:searchRetrieveResponse>\n"
+    ).encode("iso-8859-1")
+    httpx_mock.add_response(content=body, headers={"content-type": "application/xml"})
+
+    publication = bnf.fetch_by_isbn(client, tmp_settings, "9782070373284")
+    assert publication.title == "L'Été"
+    assert publication.authors[0].name == "Camus, Albert"
 
 
 def test_bnf_500_response_raises_network_error(

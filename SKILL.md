@@ -2,7 +2,7 @@
 name: quelle
 description: Fetch publication metadata (title, authors, year, DOI/ISBN, abstract, citation count) and optionally the open-access PDF, given a DOI, arXiv id, ISBN-10/13, or free-text title. Handles both academic articles and books — walks a fallback chain of free open APIs (OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, BnF) and returns a normalised JSON blob. Has no knowledge of any particular note-taking system. Use when the user says "look up this paper", "get metadata for DOI 10.xxx", "find the arXiv entry for X", "find this book by ISBN", or pastes any publication identifier with intent to retrieve information about it. Google Scholar URLs are not supported — ask the user to copy the title and pass it as free text instead.
 argument-hint: "<DOI | arXiv id | ISBN | title>"
-allowed-tools: Read, Write, Edit, Bash(quelle fetch:*), Bash(quelle cache:*), Bash(quelle config:*), Bash(quelle search:*), Bash(quelle --version:*), Bash(quelle --json:*), Bash(python3:*), Bash(jq:*), Bash(command -v quelle:*)
+allowed-tools: Read, Write, Edit, Bash(quelle fetch:*), Bash(quelle resolve:*), Bash(quelle search:*), Bash(quelle schema:*), Bash(quelle skill:*), Bash(quelle cache:*), Bash(quelle config:*), Bash(quelle --version:*), Bash(quelle --json:*), Bash(python3:*), Bash(jq:*), Bash(command -v quelle:*)
 ---
 
 Thin wrapper around the [`quelle`](https://github.com/vcoeur/quelle) CLI. Given an identifier or title, resolve the paper through free open APIs and print its normalised JSON record.
@@ -114,6 +114,7 @@ Exit codes to surface to the user on failure:
 - `2` — network or upstream API error (rate limited, timeout, 5xx)
 - `3` — local cache error
 - `4` — configuration error (missing email, bad `.env`)
+- `64` — CLI usage error (unknown flag, missing argument)
 
 On a non-zero exit, print the stderr from `quelle fetch` verbatim and stop — do not retry in a loop. If the error is `2` (rate limit), wait and ask the user whether to try again later; do not silently back off and keep hitting the API.
 
@@ -129,6 +130,15 @@ quelle cache clear --yes    # wipe everything (irreversible)
 
 Prefer `quelle cache show` over `quelle fetch` when you are only refreshing the view of an already-known paper — it keeps traffic off the upstream APIs entirely.
 
+## Beyond `fetch`
+
+The full CLI surface is `resolve`, `fetch`, `search`, `schema`, `skill`, `cache`, and `config`:
+
+- `quelle --json resolve <anything>` — universal entry: a DOI / ISBN / arXiv id, free text, an http(s) URL (web page / video), or a local `.pdf` path. Emits the publication dict plus an `x_vcoeur` block with a vault-ready, collision-resolved CiteKey (`--taken` / `--taken-file` inject the keys already in use); `--csl` exports a CSL-JSON item instead.
+- `quelle --json search <query>` — list candidate hits across every wired source when a free-text query is ambiguous.
+- `quelle --json schema` — the machine-readable, never-drifting CLI contract (commands, flags, field list, exit codes). Read it to self-orient instead of hard-coding the surface.
+- `quelle skill {install,status}` — install / check the richer agent skill bundled with the package (see Installation below).
+
 ## Cleanup
 
 ```bash
@@ -137,17 +147,19 @@ rm -f /tmp/paper.json
 
 ## Adapting this skill to your workflow
 
-This skill stops at "print the metadata". If you want to do something with the result — save to Obsidian, append to a BibTeX file, create a Zotero entry, email yourself the PDF — fork this `SKILL.md` and add your own step after `quelle fetch` returns. The JSON shape is stable: `title`, `authors` (list of `{name, orcid?, affiliation?}`), `year`, `kind` (`article`/`preprint`/`book`/`book-chapter`/`null`), `doi`, `arxiv_id`, `openalex_id`, `isbn_10`, `isbn_13`, `edition`, `page_count`, `subjects`, `abstract`, `citation_count`, `is_open_access`, `pdf_url`, `local_pdf_path`, `venue`, `publisher`, `journal_volume`, `journal_issue`, `page_range`, `topics`, `source_url`, `citation_key`, `resolved_from_chain`.
+This skill stops at "print the metadata". If you want to do something with the result — save to Obsidian, append to a BibTeX file, create a Zotero entry, email yourself the PDF — fork this `SKILL.md` and add your own step after `quelle fetch` returns. The JSON shape is stable: `title`, `authors` (list of `{name, orcid?, affiliation?}`), `year`, `kind` (`article`/`preprint`/`book`/`book-chapter`/`web`/`media`/`null`), `doi`, `arxiv_id`, `openalex_id`, `semantic_scholar_id`, `isbn_10`, `isbn_13`, `edition`, `page_count`, `subjects`, `abstract`, `citation_count`, `is_open_access`, `pdf_url`, `local_pdf_path`, `venue`, `publisher`, `journal_volume`, `journal_issue`, `page_range`, `topics`, `source_url`, `citation_key`, `resolved_from_chain`.
 
 When designing that downstream step, keep the responsible-use principles from the top of this file in mind — in particular, do not let your workflow turn `quelle` into a batch pipeline that calls the upstream APIs hundreds of times in a row.
 
 ## Installation
 
-Drop this `SKILL.md` into either:
+Prefer the richer skill bundled with the package — it installs itself and updates in lockstep with the CLI:
 
-- `~/.claude/skills/quelle/SKILL.md` — available in every Claude Code session
-- `<project>/.claude/skills/quelle/SKILL.md` — project-local (auto-loaded when Claude Code opens that project)
+```bash
+quelle skill install --user        # -> ~/.config/agents/skills/quelle/SKILL.md
+quelle skill install --project     # -> <cwd>/.agents/skills/quelle/SKILL.md
+quelle skill install --claude      # -> ~/.claude/skills/quelle/SKILL.md
+quelle skill status                # where it is installed + whether it matches the bundled copy
+```
 
-See [Claude Code's skill documentation](https://docs.claude.com/en/docs/claude-code/skills) for details.
-
-$ARGUMENTS
+This root-level file is a deliberately minimal standalone example; if you want it instead, drop it into `~/.claude/skills/quelle/SKILL.md` (every Claude Code session) or `<project>/.claude/skills/quelle/SKILL.md` (project-local). See [Claude Code's skill documentation](https://docs.claude.com/en/docs/claude-code/skills) for details.

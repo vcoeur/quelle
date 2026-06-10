@@ -1,8 +1,8 @@
-"""Output helpers — JSON vs rich TTY rendering.
+"""Output helpers — JSON vs rich rendering.
 
 Every CLI command passes a plain dict through one of these helpers.
-In `--json` mode we emit JSON to stdout. In TTY mode we render with
-rich. In plain non-TTY mode we emit a compact plain-text rendering.
+In `--json` mode we emit JSON to stdout; otherwise we render with rich
+(which itself degrades markup to plain text on a non-TTY stream).
 """
 
 from __future__ import annotations
@@ -22,14 +22,13 @@ _console = Console()
 
 @dataclass(frozen=True)
 class OutputMode:
-    """Whether the caller wants JSON, a rich TTY render, or plain text."""
+    """Whether the caller wants JSON or the rich rendering."""
 
     json: bool
-    tty: bool
 
     @classmethod
     def detect(cls, json_flag: bool) -> OutputMode:
-        return cls(json=json_flag, tty=sys.stdout.isatty() and not json_flag)
+        return cls(json=json_flag)
 
     @classmethod
     def from_ctx(cls, ctx: Any) -> OutputMode:
@@ -52,8 +51,8 @@ def _format_bytes(value: Any) -> str:
         return f"{value} B"
     units = ("KB", "MB", "GB", "TB")
     size = float(value) / 1024
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
+    for unit in units[:-1]:
+        if size < 1024:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} {units[-1]}"

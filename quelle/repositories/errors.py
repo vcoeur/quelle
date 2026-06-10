@@ -23,7 +23,18 @@ class NotFoundError(PublicationsError):
 
 
 class NetworkError(PublicationsError):
-    """HTTP / DNS / timeout / upstream API failure."""
+    """HTTP / DNS / timeout / upstream API failure.
+
+    Carries the upstream HTTP status code when one is known
+    (`status_code is None` for transport-level failures such as DNS
+    errors and timeouts), so callers can branch on the status —
+    e.g. map an upstream 404 to `NotFoundError` — without parsing
+    the message text.
+    """
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class RateLimitError(NetworkError):

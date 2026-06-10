@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from environs import Env
+from environs import Env, EnvError
 
-from quelle import paths
+from quelle import __version__, paths
 from quelle.migrate import migrate_legacy_layout
 from quelle.paths import Paths
+from quelle.repositories.errors import ConfigError
 
 
 @dataclass(frozen=True)
@@ -53,17 +54,23 @@ def load_settings() -> Settings:
     if resolved.env_file.exists():
         env.read_env(str(resolved.env_file), override=False)
 
-    contact_email = env.str("QUELLE_CONTACT_EMAIL", "")
-    default_agent = f"quelle/0.1.0 (+mailto:{contact_email})" if contact_email else "quelle/0.1.0"
+    try:
+        contact_email = env.str("QUELLE_CONTACT_EMAIL", "")
+        base_agent = f"quelle/{__version__}"
+        default_agent = f"{base_agent} (+mailto:{contact_email})" if contact_email else base_agent
 
-    return Settings(
-        openalex_api_key=env.str("OPENALEX_API_KEY", ""),
-        semantic_scholar_api_key=env.str("SEMANTIC_SCHOLAR_API_KEY", ""),
-        google_books_api_key=env.str("GOOGLE_BOOKS_API_KEY", ""),
-        unpaywall_email=env.str("UNPAYWALL_EMAIL", contact_email),
-        contact_email=contact_email,
-        http_timeout=env.float("QUELLE_HTTP_TIMEOUT", 30.0),
-        user_agent=env.str("QUELLE_USER_AGENT", default_agent),
-        max_pdf_mb=env.int("QUELLE_MAX_PDF_MB", 100),
-        paths=resolved,
-    )
+        return Settings(
+            openalex_api_key=env.str("OPENALEX_API_KEY", ""),
+            semantic_scholar_api_key=env.str("SEMANTIC_SCHOLAR_API_KEY", ""),
+            google_books_api_key=env.str("GOOGLE_BOOKS_API_KEY", ""),
+            unpaywall_email=env.str("UNPAYWALL_EMAIL", contact_email),
+            contact_email=contact_email,
+            http_timeout=env.float("QUELLE_HTTP_TIMEOUT", 30.0),
+            user_agent=env.str("QUELLE_USER_AGENT", default_agent),
+            max_pdf_mb=env.int("QUELLE_MAX_PDF_MB", 100),
+            paths=resolved,
+        )
+    except EnvError as exc:
+        # Malformed values (env or .env) are a config problem — exit code 4,
+        # not an EnvValidationError traceback.
+        raise ConfigError(f"invalid configuration value: {exc}") from exc

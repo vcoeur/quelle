@@ -72,6 +72,69 @@ def test_routes_arxiv_url_to_rich_resolver(tmp_settings, monkeypatch: pytest.Mon
     assert calls["enrich"] == "1706.03762"
 
 
+@pytest.mark.parametrize(
+    ("url", "arxiv_id"),
+    [
+        # Regression: old-style ids contain `/` and used to fall through
+        # to the Open-Graph resolver, returning a wrong kind="web" record.
+        ("https://arxiv.org/abs/math/0211159", "math/0211159"),
+        ("https://arxiv.org/abs/math.GT/0309136", "math.GT/0309136"),
+        ("https://arxiv.org/pdf/hep-th/9901001v2.pdf", "hep-th/9901001v2"),
+    ],
+)
+def test_routes_old_style_arxiv_url_to_rich_resolver(
+    url: str, arxiv_id: str, tmp_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: dict = {}
+    _stub(monkeypatch, calls)
+    resolver.resolve_any(None, tmp_settings, url)
+    assert calls["enrich"] == arxiv_id
+    assert "url" not in calls
+
+
+def test_doi_in_url_trims_trailing_file_extensions(
+    tmp_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a biorxiv-style content URL used to capture `.full.pdf`
+    into the DOI."""
+    calls: dict = {}
+    _stub(monkeypatch, calls)
+    resolver.resolve_any(
+        None,
+        tmp_settings,
+        "https://www.biorxiv.org/content/10.1101/2020.01.01.123456v1.full.pdf",
+    )
+    assert calls["enrich"] == "10.1101/2020.01.01.123456v1"
+
+
+def test_url_embedded_id_not_found_falls_back_to_url_resolver(
+    tmp_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the extracted DOI doesn't resolve, degrade to the Open-Graph
+    resolver instead of failing the whole resolve."""
+    from quelle.repositories.errors import NotFoundError
+    from quelle.services import url_resolver
+
+    calls: dict = {}
+
+    def enrich_not_found(client, settings, query, **kwargs) -> Publication:
+        calls["enrich"] = query
+        raise NotFoundError("unknown DOI")
+
+    def fake_url(client, settings, url: str) -> Publication:
+        calls["url"] = url
+        return Publication(title="web fallback", kind="web")
+
+    monkeypatch.setattr(resolver, "resolve_with_enrichment", enrich_not_found)
+    monkeypatch.setattr(url_resolver, "resolve_url", fake_url)
+
+    source_url = "https://www.biorxiv.org/content/10.1101/2020.01.01.123456v1.full.pdf"
+    pub = resolver.resolve_any(None, tmp_settings, source_url)
+    assert calls["enrich"] == "10.1101/2020.01.01.123456v1"
+    assert calls["url"] == source_url
+    assert pub.kind == "web"
+
+
 def test_routes_explicit_id_and_free_text_to_enrichment(
     tmp_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:

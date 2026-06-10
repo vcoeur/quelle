@@ -1,11 +1,17 @@
 """Unit tests for the Crossref -> Publication mapper.
 
 Inlined fixture JSON mirrors the shape of a real
-`GET https://api.crossref.org/works/<doi>` response. No network.
+`GET https://api.crossref.org/works/<doi>` response. No network —
+the wire-level tests at the bottom run against pytest-httpx mocks.
 """
 
 from __future__ import annotations
 
+import httpx
+import pytest
+
+from quelle.repositories.errors import NetworkError, NotFoundError
+from quelle.repositories.sources import crossref
 from quelle.repositories.sources.crossref import (
     _extract_pdf_link,
     _extract_year,
@@ -111,3 +117,38 @@ def test_to_publication_handles_minimal_message() -> None:
     assert publication.year is None
     assert publication.doi == "10.1/x"
     assert publication.authors == []
+
+
+# --- Wire-level error mapping ---------------------------------------------
+
+
+def test_fetch_by_doi_maps_404_to_not_found(httpx_mock, tmp_settings) -> None:
+    """An unknown DOI is a not-found (exit 1), not a network failure (exit 2)."""
+    httpx_mock.add_response(
+        url="https://api.crossref.org/works/10.1234/missing?mailto=tests%40example.com",
+        status_code=404,
+        text="Resource not found.",
+    )
+    with httpx.Client() as client, pytest.raises(NotFoundError, match="10.1234/missing"):
+        crossref.fetch_by_doi(client, tmp_settings, "10.1234/missing")
+
+
+def test_fetch_by_doi_keeps_5xx_as_network_error(httpx_mock, tmp_settings) -> None:
+    httpx_mock.add_response(
+        url="https://api.crossref.org/works/10.1234/flaky?mailto=tests%40example.com",
+        status_code=503,
+        text="boom",
+    )
+    with httpx.Client() as client, pytest.raises(NetworkError):
+        crossref.fetch_by_doi(client, tmp_settings, "10.1234/flaky")
+
+
+def test_fetch_by_doi_percent_encodes_doi(httpx_mock, tmp_settings) -> None:
+    """`?` / `#` in a DOI must not truncate the path or inject query params."""
+    httpx_mock.add_response(
+        url=("https://api.crossref.org/works/10.1000/weird%3Fx%23y?mailto=tests%40example.com"),
+        json={"message": {"DOI": "10.1000/weird?x#y", "title": ["Odd DOI"]}},
+    )
+    with httpx.Client() as client:
+        publication = crossref.fetch_by_doi(client, tmp_settings, "10.1000/weird?x#y")
+    assert publication.title == "Odd DOI"

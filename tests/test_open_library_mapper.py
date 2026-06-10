@@ -1,6 +1,6 @@
 """Unit tests for the Open Library -> Publication mappers.
 
-No network: edition / work / search-doc fixtures are inlined.
+No network: edition / work fixtures are inlined.
 """
 
 from __future__ import annotations
@@ -8,7 +8,6 @@ from __future__ import annotations
 from quelle.models.publication import Author
 from quelle.repositories.sources.open_library import (
     _description_text,
-    _doc_to_publication,
     _publish_year,
     _to_publication,
 )
@@ -84,27 +83,3 @@ def test_to_publication_handles_missing_work_and_authors() -> None:
     assert publication.authors == []
     assert publication.subjects == []
     assert publication.kind == "book"
-
-
-def test_doc_to_publication_picks_first_author_and_isbn() -> None:
-    doc = {
-        "key": "/works/OL12345W",
-        "title": "The Little Prince",
-        "author_name": ["Antoine de Saint-Exupéry"],
-        "first_publish_year": 1943,
-        "publisher": ["Gallimard"],
-        "isbn": ["2070612759", "9782070612758"],
-        "subject": ["Children's fiction", "Fables"],
-        "number_of_pages_median": 96,
-    }
-    publication = _doc_to_publication(doc)
-    assert publication.title == "The Little Prince"
-    assert publication.authors[0].name == "Antoine de Saint-Exupéry"
-    assert publication.year == 1943
-    assert publication.publisher == "Gallimard"
-    assert publication.isbn_10 == "2070612759"
-    assert publication.isbn_13 == "9782070612758"
-    assert publication.page_count == 96
-    assert publication.subjects == ["Children's fiction", "Fables"]
-    assert publication.source_url == "https://openlibrary.org/works/OL12345W"
-    assert publication.resolved_from_chain == ["open_library"]

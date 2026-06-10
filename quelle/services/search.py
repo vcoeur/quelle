@@ -143,7 +143,7 @@ def resolve_top_hit(
     synthesise a `Publication` directly and skip the round-trip back
     through the id-keyed resolver. That avoids calling Open Library or
     OpenAlex twice for the same record. Otherwise we recurse into the
-    regular id-based resolvers via `_resolve_top_hit_by_id` so the
+    regular id-based resolvers (by DOI / ISBN / arXiv id) so the
     returned `Publication` is fully populated.
     """
     # Imported lazily to break the resolver/search cycle: `resolver.py`
@@ -265,39 +265,61 @@ def _safe_call(
 
 
 def _merge(per_source: list[list[SearchHit]]) -> list[MergedHit]:
-    """Dedup hits across sources by DOI / ISBN-13 / arXiv id, then RRF-score."""
-    merged: list[MergedHit] = []
+    """Dedup hits across sources by DOI / ISBN-13 / arXiv id, then RRF-score.
+
+    An incoming hit can bridge two previously-separate entries (sharing
+    a DOI with one and an ISBN with the other) — those entries are
+    unified into the first match and the others dropped, so the same
+    work cannot surface twice in the results.
+    """
+    # Keyed by insertion counter (dicts preserve order); absorbed entries
+    # are popped outright instead of leaving holes behind.
+    merged: dict[int, MergedHit] = {}
+    next_idx = 0
     by_doi: dict[str, int] = {}
     by_isbn: dict[str, int] = {}
     by_arxiv: dict[str, int] = {}
+    id_maps = (by_doi, by_isbn, by_arxiv)
 
     for hits in per_source:
         for hit in hits:
-            existing_idx = _find_existing(hit, by_doi, by_isbn, by_arxiv)
-            if existing_idx is None:
-                merged.append(_seed(hit))
-                idx = len(merged) - 1
+            matches = _matching_indexes(hit, by_doi, by_isbn, by_arxiv)
+            if not matches:
+                idx = next_idx
+                next_idx += 1
+                merged[idx] = _seed(hit)
             else:
-                idx = existing_idx
+                idx = matches[0]
+                for other_idx in matches[1:]:
+                    merged[idx] = _absorb_merged(merged[idx], merged.pop(other_idx))
+                    # Re-point every id that referenced the dropped entry
+                    # (it may carry ids the unified record keeps losing to
+                    # first-wins, e.g. a conflicting DOI) at the survivor.
+                    for id_map in id_maps:
+                        for key, value in id_map.items():
+                            if value == other_idx:
+                                id_map[key] = idx
                 merged[idx] = _absorb_merged(merged[idx], _seed(hit))
             _index(merged[idx], idx, by_doi, by_isbn, by_arxiv)
 
-    return merged
+    return list(merged.values())
 
 
-def _find_existing(
+def _matching_indexes(
     hit: SearchHit,
     by_doi: dict[str, int],
     by_isbn: dict[str, int],
     by_arxiv: dict[str, int],
-) -> int | None:
-    if hit.doi and hit.doi in by_doi:
-        return by_doi[hit.doi]
-    if hit.isbn_13 and hit.isbn_13 in by_isbn:
-        return by_isbn[hit.isbn_13]
-    if hit.arxiv_id and hit.arxiv_id in by_arxiv:
-        return by_arxiv[hit.arxiv_id]
-    return None
+) -> list[int]:
+    """Every distinct merged-entry index this hit's ids point at, in ladder order."""
+    indexes: list[int] = []
+    for value, id_map in ((hit.doi, by_doi), (hit.isbn_13, by_isbn), (hit.arxiv_id, by_arxiv)):
+        if not value:
+            continue
+        idx = id_map.get(value)
+        if idx is not None and idx not in indexes:
+            indexes.append(idx)
+    return indexes
 
 
 def _index(
@@ -347,13 +369,11 @@ def _dedup_by_similarity(merged: list[MergedHit]) -> list[MergedHit]:
     """
     canonical: dict[tuple[str, str], int] = {}
     survivors: list[MergedHit] = []
-    survived_indexes: list[int] = []
 
     for hit in merged:
         key = _similarity_key(hit)
         if key is None:
             survivors.append(hit)
-            survived_indexes.append(len(survivors) - 1)
             continue
         existing = canonical.get(key)
         if existing is None:

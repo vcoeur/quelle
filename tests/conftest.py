@@ -42,6 +42,7 @@ def tmp_settings(tmp_path: Path) -> Settings:
         pdf_dir=data_dir / "pdfs",
         cache_db=cache_dir / "cache.sqlite",
         is_dev=False,
+        is_default=False,
     )
     return Settings(
         openalex_api_key="",

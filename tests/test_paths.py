@@ -33,6 +33,8 @@ def test_env_overrides_win(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     assert resolved.env_file == config / ".env"
     assert resolved.pdf_dir == data / "pdfs"
     assert resolved.cache_db == cache / "cache.sqlite"
+    # An env override means the layout is no longer the platformdirs default.
+    assert resolved.is_default is False
 
 
 def test_env_overrides_expand_user(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -57,6 +59,7 @@ def test_dev_mode_uses_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     resolved = paths.resolve()
 
     assert resolved.is_dev is True
+    assert resolved.is_default is False
     assert resolved.config_dir == fake_repo
     assert resolved.data_dir == fake_repo / ".dev-state"
     assert resolved.cache_dir == fake_repo / ".dev-state" / "cache"
@@ -79,6 +82,7 @@ def test_installed_mode_uses_platformdirs(monkeypatch: pytest.MonkeyPatch, tmp_p
     resolved = paths.resolve()
 
     assert resolved.is_dev is False
+    assert resolved.is_default is True
     assert resolved.config_dir == fake_cfg
     assert resolved.data_dir == fake_data
     assert resolved.cache_dir == fake_cache
@@ -97,6 +101,7 @@ def test_env_override_beats_dev_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 
     assert resolved.data_dir == explicit
     assert resolved.config_dir == fake_repo  # unaffected — config override not set
+    assert resolved.is_default is False
 
 
 def test_ensure_dirs_creates_all_three(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -133,3 +138,45 @@ def test_installed_location_detector() -> None:
     assert not paths._looks_like_installed_location(
         Path("/home/a/src/vcoeur/quelle/quelle/paths.py")
     )
+
+
+# --- _repo_root only accepts quelle's own pyproject.toml --------------------
+
+
+def _fake_module_at(tmp_path: Path, relative: str) -> Path:
+    """Create a fake `paths.py` location under tmp_path and return it."""
+    module = tmp_path / relative
+    module.parent.mkdir(parents=True, exist_ok=True)
+    module.write_text("# placeholder\n")
+    return module
+
+
+def test_repo_root_ignores_foreign_pyproject(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A vendored copy under another project's repo must not trigger dev mode."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "someone-else"\n')
+    module = _fake_module_at(tmp_path, "vendor/quelle/paths.py")
+    monkeypatch.setattr(paths, "__file__", str(module))
+
+    assert paths._repo_root() is None
+
+
+def test_repo_root_accepts_quelle_pyproject(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "quelle"\n')
+    module = _fake_module_at(tmp_path, "quelle/paths.py")
+    monkeypatch.setattr(paths, "__file__", str(module))
+
+    assert paths._repo_root() == tmp_path
+
+
+def test_repo_root_treats_unparseable_pyproject_as_not_quelle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / "pyproject.toml").write_text("not [valid toml ===")
+    module = _fake_module_at(tmp_path, "quelle/paths.py")
+    monkeypatch.setattr(paths, "__file__", str(module))
+
+    assert paths._repo_root() is None

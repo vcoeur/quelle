@@ -18,9 +18,24 @@ jobs:
       - name: Clean-install smoke
         run: bash scripts/smoke-install.sh
 
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # hatch-vcs needs full history + tags to derive the version
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+      - name: Run test suite
+        run: uv run pytest -q
+
   build-and-publish:
     name: Build and publish to PyPI
-    needs: smoke   # never publish a wheel that fails to install + self-describe clean
+    # Never publish a wheel that fails to install + self-describe clean, or a
+    # tag whose test suite fails — tag pushes do not trigger ci.yml, so the
+    # release workflow must gate on the tests itself.
+    needs: [smoke, test]
     runs-on: ubuntu-latest
     permissions:
       id-token: write   # required for OIDC trusted publishing
@@ -37,4 +52,7 @@ jobs:
         run: uv build
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # Pinned to an exact release tag (not the floating `release/v1` branch):
+        # this job holds OIDC publish rights, so its action ref must not be a
+        # moving target someone else controls.
+        uses: pypa/gh-action-pypi-publish@v1.14.0

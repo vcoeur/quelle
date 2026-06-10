@@ -516,7 +516,7 @@ def test_render_search_rich_path(monkeypatch: pytest.MonkeyPatch, capsys) -> Non
             }
         ],
     }
-    render_search(payload, mode=OutputMode(json=False, tty=False))
+    render_search(payload, mode=OutputMode(json=False))
     captured = capsys.readouterr()
     assert "Foo" in captured.out
 
@@ -525,7 +525,7 @@ def test_render_search_rich_path_empty(capsys) -> None:
     from quelle.cli.output import render_search
 
     payload = {"query": "x", "type": "all", "limit": 1, "hits": []}
-    render_search(payload, mode=OutputMode(json=False, tty=False))
+    render_search(payload, mode=OutputMode(json=False))
     captured = capsys.readouterr()
     assert "no matches" in captured.out
 
@@ -554,7 +554,7 @@ def test_output_mode_is_frozen() -> None:
     raises FrozenInstanceError."""
     from dataclasses import FrozenInstanceError
 
-    mode = OutputMode(json=True, tty=False)
+    mode = OutputMode(json=True)
     with pytest.raises(FrozenInstanceError):
         mode.json = False  # type: ignore[misc]
 

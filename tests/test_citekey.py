@@ -36,6 +36,20 @@ def test_base_key_authored_missing_year() -> None:
     assert base_key(_authored(["Rosenblatt"], None)) == "RosenblattND"
 
 
+def test_base_key_authored_ascii_folds_accents() -> None:
+    assert base_key(_authored(["François Récanati"], 2020)) == "Recanati2020"
+
+
+def test_base_key_authored_surname_particle_keeps_last_word() -> None:
+    assert base_key(_authored(["Ferdinand de Saussure"], 1916)) == "Saussure1916"
+
+
+def test_base_key_skips_whitespace_only_author_and_uses_next() -> None:
+    # A blank first author must not derail the authored branch when a
+    # later author is usable — citekey mirrors citation_key()'s skipping.
+    assert base_key(_authored(["   ", "Frank Rosenblatt"], 1958)) == "Rosenblatt1958"
+
+
 # --- base_key: web --------------------------------------------------------
 
 

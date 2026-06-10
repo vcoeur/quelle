@@ -36,6 +36,13 @@ def _bundled_skill_text() -> str:
     return (resources.files("quelle") / "skill" / "SKILL.md").read_text(encoding="utf-8")
 
 
+def _mode(ctx: typer.Context, json_output: bool) -> OutputMode:
+    """Combine the root `--json` flag (stashed on ctx.obj) with the
+    sub-app's trailing `--json`, kept for back-compat."""
+    root_json = bool(getattr(ctx, "obj", None) and ctx.obj.get("json"))
+    return OutputMode.detect(json_output or root_json)
+
+
 def _emit_error(message: str, *, mode: OutputMode, code: int = 1, kind: str = "user") -> None:
     if mode.json:
         emit_json({"error": kind, "message": message, "code": code})
@@ -66,6 +73,7 @@ def _resolve_target(*, user: bool, project: bool, claude: bool, dest: Path | Non
 
 @skill_app.command("install")
 def skill_install(
+    ctx: typer.Context,
     user: bool = typer.Option(
         False, "--user", help="Install to ~/.config/agents/skills/quelle/ (default)."
     ),
@@ -80,7 +88,7 @@ def skill_install(
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Copy the bundled SKILL.md into a skills directory."""
-    mode = OutputMode.detect(json_output)
+    mode = _mode(ctx, json_output)
     try:
         target_dir = _resolve_target(user=user, project=project, claude=claude, dest=dest)
     except ValueError as exc:
@@ -108,10 +116,11 @@ def skill_install(
 
 @skill_app.command("status")
 def skill_status(
+    ctx: typer.Context,
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     """Show where the skill is installed and whether it matches the bundled copy."""
-    mode = OutputMode.detect(json_output)
+    mode = _mode(ctx, json_output)
     bundled = _bundled_skill_text()
     targets = {
         "user": USER_SKILL_DIR / "SKILL.md",

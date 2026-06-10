@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from quelle.models.publication import Author, Publication
 
 
@@ -66,7 +68,9 @@ def test_merge_deduplicates_chain_entries() -> None:
     assert a.merged_with(b).resolved_from_chain == ["openalex"]
 
 
-def test_merge_keeps_primary_title_even_if_empty_string() -> None:
+def test_merge_fills_empty_primary_title_from_secondary() -> None:
+    """An empty title is "missing" under the merge contract, so the
+    secondary's title fills it in."""
     primary = Publication(title="", resolved_from_chain=["openalex"])
     other = Publication(title="Filled in", resolved_from_chain=["crossref"])
     assert primary.merged_with(other).title == "Filled in"
@@ -97,3 +101,44 @@ def test_citation_key_three_or_more_authors() -> None:
 def test_citation_key_missing_author_and_year() -> None:
     pub = Publication(title="Anonymous")
     assert pub.citation_key() == "UnknownND"
+
+
+def test_citation_key_whitespace_only_author_falls_back_to_unknown() -> None:
+    # Regression: " ".split()[-1] used to raise IndexError and kill the run.
+    pub = Publication(title="Garbage upstream", authors=[Author(name="   ")], year=2020)
+    assert pub.citation_key() == "Unknown2020"
+
+
+def test_citation_key_skips_unusable_author_names() -> None:
+    pub = Publication(
+        title="Partially garbage",
+        authors=[Author(name=" "), Author(name="Frank Rosenblatt")],
+        year=1958,
+    )
+    assert pub.citation_key() == "Rosenblatt1958"
+
+
+def test_citation_key_sanitises_path_traversal_author_names() -> None:
+    # Regression: upstream author names flowed into PDF paths unsanitised.
+    pub = Publication(
+        title="Evil",
+        authors=[Author(name="../../../etc/passwd"), Author(name="Bob /tmp/x")],
+        year=2021,
+    )
+    key = pub.citation_key()
+    assert re.fullmatch(r"[A-Za-z0-9]+", key)
+    assert key == "etcpasswdtmpx2021"
+
+
+def test_citation_key_ascii_folds_accented_names() -> None:
+    pub = Publication(title="Oratio", authors=[Author(name="François Récanati")], year=2020)
+    assert pub.citation_key() == "Recanati2020"
+
+
+def test_citation_key_keeps_surname_particles() -> None:
+    pub = Publication(
+        title="Cours de linguistique générale",
+        authors=[Author(name="Ferdinand de Saussure")],
+        year=1916,
+    )
+    assert pub.citation_key() == "Saussure1916"

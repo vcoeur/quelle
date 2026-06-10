@@ -12,6 +12,8 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+import typer
+
 from quelle.models.publication import Author, Publication
 from quelle.models.search import MergedHit
 from quelle.repositories.errors import (
@@ -23,6 +25,13 @@ from quelle.repositories.errors import (
     UserError,
 )
 from quelle.services.citekey import base_key, vault_kind
+from quelle.settings import Settings, load_settings
+
+# Exit code for CLI usage errors (bad flags / missing arguments), per BSD
+# `EX_USAGE`. Click defaults usage errors to exit 2, which collides with
+# the documented "network error" code; `cli/main.py` repoints click's
+# `UsageError.exit_code` at this constant once at import time.
+EX_USAGE = 64
 
 # quelle `kind` → CSL-JSON item type. Export-only; the canonical
 # convention rules live in `quelle.services.citekey`.
@@ -185,14 +194,24 @@ def load_taken_set(taken_csv: str | None, taken_file: str | None) -> set[str]:
 
 
 def _parse_taken_text(text: str) -> set[str]:
-    """Parse a taken-file body: JSON `{citekeys:[...]}` or one key per line."""
+    """Parse a taken-file body: JSON `{citekeys:[...]}`, a JSON array of
+    strings, or one key per line.
+
+    Raises ValueError when the JSON does not carry a list of strings — a
+    string `citekeys` value especially must not be iterated into single
+    characters, which would silently weaken minting.
+    """
     stripped = text.strip()
     if not stripped:
         return set()
-    if stripped.startswith("{"):
+    if stripped.startswith(("{", "[")):
         obj = json.loads(stripped)
-        keys = obj.get("citekeys", []) if isinstance(obj, dict) else []
-        return {str(key).strip() for key in keys if str(key).strip()}
+        keys = obj.get("citekeys", []) if isinstance(obj, dict) else obj
+        if not isinstance(keys, list) or not all(isinstance(key, str) for key in keys):
+            raise ValueError(
+                'taken-set JSON must be a list of strings, or {"citekeys": [<strings>]}'
+            )
+        return {key.strip() for key in keys if key.strip()}
     return {line.strip() for line in stripped.splitlines() if line.strip()}
 
 
@@ -246,8 +265,23 @@ _ERROR_HINTS: dict[type, str] = {
 }
 
 
+def load_settings_or_exit() -> Settings:
+    """Load settings, mapping a `ConfigError` (e.g. a malformed `.env`
+    value) to a reported error + the documented exit code 4 instead of a
+    traceback."""
+    try:
+        return load_settings()
+    except PublicationsError as exc:
+        report_error(exc)
+        raise typer.Exit(exit_code_for(exc)) from exc
+
+
 def exit_code_for(exc: PublicationsError) -> int:
-    """Map a structured error to a CLI exit code."""
+    """Map a structured error to a CLI exit code.
+
+    Usage errors (bad flags / arguments) are click's domain and exit with
+    `EX_USAGE` (64); they never reach this classifier.
+    """
     if isinstance(exc, (UserError, NotFoundError)):
         return 1
     if isinstance(exc, NetworkError):

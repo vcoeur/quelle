@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from quelle.models.publication import Publication
+from quelle.models.publication import Author, Publication
 from quelle.repositories.errors import UserError
 from quelle.services.citekey import base_key
 from quelle.services.pdf_resolver import resolve_and_download, resolve_local_pdf
@@ -106,6 +106,60 @@ def test_total_failure_preserves_last_reason(tmp_path: Path, tmp_settings) -> No
     assert "failed" in (outcome.reason_if_none or "")
 
 
+def test_authorless_web_filename_comes_from_base_key(tmp_path: Path, tmp_settings) -> None:
+    # Regression: the filename was minted from raw citation_key(), landing
+    # every authorless web/media download on UnknownND.pdf.
+    publication = Publication(
+        title="Printer Setup Guide",
+        year=2024,
+        kind="web",
+        venue="Bambu Lab",
+        source_url="https://bambulab.com/en/post/x1",
+        pdf_url="https://bambulab.com/files/guide.pdf",
+        resolved_from_chain=["url"],
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4 web guide",
+            headers={"content-type": "application/pdf"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        outcome = resolve_and_download(client, tmp_settings, publication, tmp_path)
+
+    assert outcome.local_path is not None
+    assert outcome.local_path.name == f"{base_key(publication)}.pdf"
+    assert outcome.local_path.name == "BambuLab2024-x1.pdf"
+
+
+def test_pdf_filename_never_escapes_dest_dir(tmp_path: Path, tmp_settings) -> None:
+    # Defence in depth: even a traversal-carrying author name must yield a
+    # download inside dest_dir.
+    publication = Publication(
+        title="Evil",
+        authors=[Author(name="../../escape")],
+        year=2021,
+        pdf_url="https://example.com/evil.pdf",
+        resolved_from_chain=["openalex"],
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4 evil",
+            headers={"content-type": "application/pdf"},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        outcome = resolve_and_download(client, tmp_settings, publication, tmp_path)
+
+    assert outcome.local_path is not None
+    assert outcome.local_path.parent == tmp_path
+    assert "/" not in outcome.local_path.name
+
+
 # --- resolve_local_pdf ----------------------------------------------------
 
 
@@ -136,3 +190,42 @@ def test_resolve_local_pdf_degrades_to_filename_and_mtime(tmp_path: Path) -> Non
 def test_resolve_local_pdf_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(UserError):
         resolve_local_pdf(tmp_path / "nope.pdf")
+
+
+def test_resolve_local_pdf_decodes_utf16be_title(tmp_path: Path) -> None:
+    # Regression: a BOM-prefixed UTF-16BE /Title (the common Word/LaTeX
+    # output) was decoded as latin-1, yielding NUL-riddled mojibake.
+    title_utf16 = b"\xfe\xff" + "Étude générale".encode("utf-16-be")
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(
+        b"%PDF-1.4\n1 0 obj<</Title ("
+        + title_utf16
+        + b") /CreationDate (D:20210101000000)>>endobj\n%%EOF"
+    )
+    pub = resolve_local_pdf(pdf)
+    assert pub.title == "Étude générale"
+    assert "\x00" not in pub.title
+    assert pub.year == 2021
+    assert base_key(pub) == "EtudeGenerale2021"
+
+
+def test_resolve_local_pdf_unescapes_backslash_escapes(tmp_path: Path) -> None:
+    # \\ must decode to a single backslash; \( and \) keep working.
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<</Title (A \\\\ B \\(annotated\\))>>endobj\n%%EOF")
+    pub = resolve_local_pdf(pdf)
+    assert pub.title == "A \\ B (annotated)"
+
+
+def test_resolve_local_pdf_strips_control_characters_from_title(tmp_path: Path) -> None:
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<</Title (Bad\x00Title\x07 Here)>>endobj\n%%EOF")
+    pub = resolve_local_pdf(pdf)
+    assert pub.title == "BadTitle Here"
+
+
+def test_resolve_local_pdf_control_only_title_degrades_to_filename(tmp_path: Path) -> None:
+    pdf = tmp_path / "fallback-name.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n1 0 obj<</Title (\x00\x01\x02)>>endobj\n%%EOF")
+    pub = resolve_local_pdf(pdf)
+    assert pub.title == "fallback-name"

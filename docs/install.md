@@ -1,6 +1,6 @@
 ---
 title: Install · quelle
-description: How to install quelle, bootstrap the config, and configure API keys for OpenAlex, Crossref, Semantic Scholar, arXiv, and Unpaywall.
+description: How to install quelle, bootstrap the config, and configure API keys for OpenAlex, Crossref, Semantic Scholar, arXiv, Unpaywall, Open Library, Google Books, and BnF.
 ---
 
 # Install
@@ -73,6 +73,8 @@ quelle --json config               # same payload as JSON, scriptable
 | `QUELLE_CONTACT_EMAIL` | OpenAlex, Crossref, Unpaywall | Always — enrolls you in the polite pools and is mandatory for Unpaywall. |
 | `OPENALEX_API_KEY` | OpenAlex | Required once OpenAlex finishes deprecating the mailto polite pool (Jan 2026 rollout). |
 | `SEMANTIC_SCHOLAR_API_KEY` | Semantic Scholar | Optional — boosts unauth rate limit. Free key from Ai2. |
+| `GOOGLE_BOOKS_API_KEY` | Google Books | Optional — raises the 1 000 requests/day-per-IP unauthenticated cap. |
+| `QUELLE_USER_AGENT` | all HTTP requests | Optional override. Defaults to `quelle/<version>`, with `(+mailto:…)` appended when the contact email is set. |
 
 See [`.env.example`](https://github.com/vcoeur/quelle/blob/main/.env.example) for the full list.
 

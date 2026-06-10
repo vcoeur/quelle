@@ -60,6 +60,36 @@ def test_resolve_url_media_by_known_host(tmp_settings) -> None:
     assert pub.kind == "media"
 
 
+def test_resolve_url_prefers_publication_date_over_modified_time(tmp_settings) -> None:
+    """A page edited recently is still dated by its publication date."""
+    html = """<html><head>
+    <meta property="og:updated_time" content="2025-01-02T00:00:00Z">
+    <meta property="article:modified_time" content="2024-12-01T00:00:00Z">
+    <meta name="citation_publication_date" content="2019/06/01">
+    </head></html>"""
+    with _client(html) as client:
+        pub = resolve_url(client, tmp_settings, "https://example.com/post")
+    assert pub.year == 2019
+
+
+def test_resolve_url_falls_back_to_modified_time(tmp_settings) -> None:
+    """With no publication-date meta, a modified-time meta still dates the page."""
+    html = """<html><head>
+    <meta property="article:modified_time" content="2023-05-05T00:00:00Z">
+    </head></html>"""
+    with _client(html) as client:
+        pub = resolve_url(client, tmp_settings, "https://example.com/post")
+    assert pub.year == 2023
+
+
+def test_host_of_lowercases_and_drops_port() -> None:
+    from quelle.services.url_resolver import MEDIA_HOSTS, host_of
+
+    assert host_of("https://WWW.YouTube.COM:443/watch?v=x") == "www.youtube.com"
+    assert host_of("not a url") == ""
+    assert "youtu.be" in MEDIA_HOSTS
+
+
 def test_resolve_url_degrades_gracefully(tmp_settings) -> None:
     # No title, no date: still a valid web Publication with the URL as title.
     with _client(_SPARSE_HTML) as client:
