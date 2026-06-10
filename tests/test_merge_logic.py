@@ -68,7 +68,9 @@ def test_merge_deduplicates_chain_entries() -> None:
     assert a.merged_with(b).resolved_from_chain == ["openalex"]
 
 
-def test_merge_keeps_primary_title_even_if_empty_string() -> None:
+def test_merge_fills_empty_primary_title_from_secondary() -> None:
+    """An empty title is "missing" under the merge contract, so the
+    secondary's title fills it in."""
     primary = Publication(title="", resolved_from_chain=["openalex"])
     other = Publication(title="Filled in", resolved_from_chain=["crossref"])
     assert primary.merged_with(other).title == "Filled in"

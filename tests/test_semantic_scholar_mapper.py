@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from quelle.repositories.errors import NotFoundError
+from quelle.repositories.errors import NetworkError, NotFoundError
 from quelle.repositories.sources import semantic_scholar
 from quelle.repositories.sources.semantic_scholar import _to_publication
 
@@ -68,6 +68,16 @@ def test_to_publication_raises_on_empty_payload() -> None:
         _to_publication({})
 
 
+def test_to_publication_skips_nameless_authors() -> None:
+    paper = {
+        "paperId": "x",
+        "title": "T",
+        "authors": [{"name": ""}, {}, {"name": "Real Name"}],
+    }
+    publication = _to_publication(paper)
+    assert [author.name for author in publication.authors] == ["Real Name"]
+
+
 def test_to_publication_without_pdf_sets_oa_false() -> None:
     paper = {
         "paperId": "x",
@@ -118,6 +128,14 @@ def test_fetch_by_doi_maps_404_to_not_found(httpx_mock, tmp_settings) -> None:
     httpx_mock.add_response(status_code=404, text="Paper not found")
     with httpx.Client() as client, pytest.raises(NotFoundError, match="10.1234/missing"):
         semantic_scholar.fetch_by_doi(client, tmp_settings, "10.1234/missing")
+
+
+def test_fetch_by_doi_propagates_non_404_network_errors(httpx_mock, tmp_settings) -> None:
+    """A 5xx is a network failure (exit 2), not a not-found (exit 1)."""
+    httpx_mock.add_response(status_code=503, text="upstream down")
+    with httpx.Client() as client, pytest.raises(NetworkError) as excinfo:
+        semantic_scholar.fetch_by_doi(client, tmp_settings, "10.1/flaky")
+    assert excinfo.value.status_code == 503
 
 
 def test_fetch_by_doi_percent_encodes_doi(httpx_mock, tmp_settings) -> None:

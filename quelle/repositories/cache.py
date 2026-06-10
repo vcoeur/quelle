@@ -105,6 +105,7 @@ class Cache:
         surrogate-id schema. Both run before stamping the version.
         """
         db_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = None
         try:
             connection = sqlite3.connect(db_path)
             connection.row_factory = sqlite3.Row
@@ -117,6 +118,8 @@ class Cache:
             )
             connection.commit()
         except sqlite3.Error as exc:
+            if connection is not None:
+                connection.close()
             raise CacheError(f"failed to open cache at {db_path}: {exc}") from exc
         instance = cls(connection)
         instance._db_path = db_path

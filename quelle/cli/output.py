@@ -51,8 +51,8 @@ def _format_bytes(value: Any) -> str:
         return f"{value} B"
     units = ("KB", "MB", "GB", "TB")
     size = float(value) / 1024
-    for unit in units:
-        if size < 1024 or unit == units[-1]:
+    for unit in units[:-1]:
+        if size < 1024:
             return f"{size:.1f} {unit}"
         size /= 1024
     return f"{size:.1f} {units[-1]}"

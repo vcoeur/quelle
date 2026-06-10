@@ -21,8 +21,10 @@ def test_version_flag_prints_name_and_version() -> None:
 
 
 def test_bare_quelle_shows_help() -> None:
+    """Bare `quelle` prints the usage view and exits with the usage code."""
     result = runner.invoke(app, [])
-    assert result.exit_code != 0 or "Usage" in result.output
+    assert result.exit_code == 64
+    assert "Usage" in result.output
 
 
 def test_config_root_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,6 +90,114 @@ def test_malformed_env_value_exits_4(tmp_path: Path, monkeypatch: pytest.MonkeyP
     result = runner.invoke(app, ["cache", "list"])
     assert result.exit_code == 4
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_fetch_not_found_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resolver miss is the documented exit 1, not a traceback."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.repositories.errors import NotFoundError
+
+    def raise_not_found(*args, **kwargs):
+        raise NotFoundError("no record for query")
+
+    monkeypatch.setattr(cli_main, "resolve_with_enrichment", raise_not_found)
+    result = runner.invoke(app, ["fetch", "10.1234/nope", "--no-cache"])
+    assert result.exit_code == 1
+    assert "NotFoundError" in result.output
+
+
+def test_fetch_network_error_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An upstream failure is the documented exit 2 (network), not 1."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.repositories.errors import NetworkError
+
+    def raise_network_error(*args, **kwargs):
+        raise NetworkError("503 from upstream", status_code=503)
+
+    monkeypatch.setattr(cli_main, "resolve_with_enrichment", raise_network_error)
+    result = runner.invoke(app, ["fetch", "10.1234/flaky", "--no-cache"])
+    assert result.exit_code == 2
+    assert "NetworkError" in result.output
+
+
+def test_resolve_network_error_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`resolve` honours the same exit-code contract as `fetch`."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.repositories.errors import NetworkError
+
+    def raise_network_error(*args, **kwargs):
+        raise NetworkError("timeout", status_code=None)
+
+    monkeypatch.setattr(cli_main, "resolve_any", raise_network_error)
+    result = runner.invoke(app, ["resolve", "10.1234/flaky"])
+    assert result.exit_code == 2
+
+
+def test_search_network_error_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`search` honours the same exit-code contract as `fetch`."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    from quelle.cli import main as cli_main
+    from quelle.repositories.errors import NetworkError
+
+    def raise_network_error(*args, **kwargs):
+        raise NetworkError("upstream 502", status_code=502)
+
+    monkeypatch.setattr(cli_main.search_service, "search", raise_network_error)
+    result = runner.invoke(app, ["search", "anything"])
+    assert result.exit_code == 2
+
+
+def test_exit_code_for_maps_every_documented_code() -> None:
+    """The classifier itself honours the documented exit-code table."""
+    from quelle.cli._helpers import exit_code_for
+    from quelle.repositories.errors import (
+        CacheError,
+        ConfigError,
+        NetworkError,
+        NotFoundError,
+        PublicationsError,
+        RateLimitError,
+        UserError,
+    )
+
+    assert exit_code_for(UserError("x")) == 1
+    assert exit_code_for(NotFoundError("x")) == 1
+    assert exit_code_for(NetworkError("x")) == 2
+    assert exit_code_for(RateLimitError("x", status_code=429)) == 2  # subclass of NetworkError
+    assert exit_code_for(CacheError("x")) == 3
+    assert exit_code_for(ConfigError("x")) == 4
+    # Unclassified expected errors degrade to the generic user code.
+    assert exit_code_for(PublicationsError("x")) == 1
+
+
+def test_report_error_hints_cover_subclasses(capsys) -> None:
+    """A RateLimitError gets the NetworkError hint via the isinstance walk."""
+    from quelle.cli._helpers import report_error
+    from quelle.repositories.errors import RateLimitError
+
+    report_error(RateLimitError("slow down", status_code=429))
+    captured = capsys.readouterr()
+    assert "RateLimitError" in captured.err
+    assert "Network or upstream API failure" in captured.err
 
 
 # --- User-Agent + polite-pool warning ---------------------------------------

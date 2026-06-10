@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from quelle.repositories.errors import ConfigError, RateLimitError
+from quelle.repositories.errors import ConfigError, NotFoundError, RateLimitError
 from quelle.repositories.sources import unpaywall
 from quelle.repositories.sources.unpaywall import extract_pdf_url, lookup_by_doi
 
@@ -66,6 +66,19 @@ def test_lookup_by_doi_other_network_error_warns_and_degrades(
     captured = capsys.readouterr()
     assert "Unpaywall lookup failed" in captured.err
     assert "10.1/flaky" in captured.err
+
+
+def test_lookup_by_doi_not_found_error_returns_empty_dict(
+    tmp_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A typed NotFoundError from the HTTP layer is a normal miss, like a 404."""
+    unpaywall._reset_rate_limit_for_tests()
+
+    def raise_not_found(*args, **kwargs):
+        raise NotFoundError("no record")
+
+    monkeypatch.setattr(unpaywall, "get_json", raise_not_found)
+    assert lookup_by_doi(client=None, settings=tmp_settings, doi="10.1/x") == {}
 
 
 def test_lookup_by_doi_programming_errors_propagate(

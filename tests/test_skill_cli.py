@@ -5,12 +5,32 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
+from quelle.cli import skill as skill_module
 from quelle.cli.main import app
 from quelle.cli.skill import _bundled_skill_text
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_skill_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep skill-dir resolution off the developer's real $HOME and cwd.
+
+    `USER_SKILL_DIR` / `CLAUDE_SKILL_DIR` are computed from `Path.home()`
+    at import time, so patching $HOME afterwards would not move them —
+    patch the module globals instead, and chdir into tmp_path so the
+    project scope (`Path.cwd()`-relative) is isolated too.
+    """
+    monkeypatch.setattr(
+        skill_module, "USER_SKILL_DIR", tmp_path / "home" / ".config" / "agents-skills" / "quelle"
+    )
+    monkeypatch.setattr(
+        skill_module, "CLAUDE_SKILL_DIR", tmp_path / "home" / ".claude-skills" / "quelle"
+    )
+    monkeypatch.chdir(tmp_path)
 
 
 def test_skill_install_to_dest(tmp_path: Path) -> None:
@@ -68,3 +88,51 @@ def test_skill_install_honours_root_json_flag(tmp_path: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.output)
     assert Path(payload["installed"]) == dest / "SKILL.md"
+
+
+def test_skill_install_user_scope_lands_in_user_dir() -> None:
+    """`--user` (also the default scope) targets the user skills dir."""
+    result = runner.invoke(app, ["skill", "install", "--user", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert Path(payload["installed"]) == skill_module.USER_SKILL_DIR / "SKILL.md"
+
+
+def test_skill_install_project_scope_lands_under_cwd(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["skill", "install", "--project", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert Path(payload["installed"]) == tmp_path / ".agents" / "skills" / "quelle" / "SKILL.md"
+
+
+def test_skill_install_claude_scope_lands_in_claude_dir() -> None:
+    result = runner.invoke(app, ["skill", "install", "--claude", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert Path(payload["installed"]) == skill_module.CLAUDE_SKILL_DIR / "SKILL.md"
+
+
+def test_skill_install_rejects_two_scopes() -> None:
+    result = runner.invoke(app, ["skill", "install", "--user", "--claude", "--json"])
+    assert result.exit_code == 1
+    assert json.loads(result.output)["error"] == "user"
+
+
+def test_skill_status_text_reports_install_states() -> None:
+    """The plain-text status walks all three scopes with their states."""
+    install = runner.invoke(app, ["skill", "install", "--user"])
+    assert install.exit_code == 0
+    result = runner.invoke(app, ["skill", "status"])
+    assert result.exit_code == 0
+    assert "up to date" in result.output
+    assert "not installed" in result.output
+
+
+def test_skill_status_flags_stale_copy() -> None:
+    """An installed SKILL.md that drifted from the bundled copy reads STALE."""
+    runner.invoke(app, ["skill", "install", "--user"])
+    target = skill_module.USER_SKILL_DIR / "SKILL.md"
+    target.write_text("drifted", encoding="utf-8")
+    result = runner.invoke(app, ["skill", "status"])
+    assert result.exit_code == 0
+    assert "STALE" in result.output
