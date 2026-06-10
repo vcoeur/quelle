@@ -15,6 +15,7 @@ the user's real installed data.
 from __future__ import annotations
 
 import os
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +39,11 @@ class Paths:
     pdf_dir: Path
     cache_db: Path
     is_dev: bool
+    # True only when every location is the default platformdirs target —
+    # no QUELLE_*_DIR override active and not running in dev mode. The
+    # legacy-layout migration keys off this so it never relocates real
+    # user data into a throwaway override dir or a repo's `.dev-state/`.
+    is_default: bool
 
 
 def _looks_like_installed_location(path: Path) -> bool:
@@ -46,13 +52,34 @@ def _looks_like_installed_location(path: Path) -> bool:
     return "site-packages" in parts or ("uv" in parts and "tools" in parts)
 
 
+def _declares_quelle(pyproject: Path) -> bool:
+    """True when `pyproject` parses as TOML and declares `name = "quelle"`.
+
+    Guards dev-mode detection against foreign projects: a vendored copy of
+    quelle under someone else's repo finds *their* `pyproject.toml` first,
+    and treating it as quelle's would seed `.env` / `.dev-state/` there.
+    A parse error counts as "not quelle".
+    """
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    project = data.get("project")
+    return isinstance(project, dict) and project.get("name") == "quelle"
+
+
 def _repo_root() -> Path | None:
-    """Return the repo root when running from a source checkout, else None."""
+    """Return the repo root when running from a source checkout, else None.
+
+    Only a `pyproject.toml` that actually declares quelle counts; foreign
+    pyprojects above a vendored install are skipped.
+    """
     here = Path(__file__).resolve()
     if _looks_like_installed_location(here):
         return None
     for parent in here.parents:
-        if (parent / "pyproject.toml").exists():
+        candidate = parent / "pyproject.toml"
+        if candidate.exists() and _declares_quelle(candidate):
             return parent
     return None
 
@@ -82,6 +109,10 @@ def resolve() -> Paths:
     data_dir = pick(ENV_DATA_DIR, dev_data, installed_data)
     cache_dir = pick(ENV_CACHE_DIR, dev_cache, installed_cache)
 
+    any_override = any(
+        os.environ.get(env_var) for env_var in (ENV_CONFIG_DIR, ENV_DATA_DIR, ENV_CACHE_DIR)
+    )
+
     return Paths(
         config_dir=config_dir,
         data_dir=data_dir,
@@ -90,6 +121,7 @@ def resolve() -> Paths:
         pdf_dir=data_dir / "pdfs",
         cache_db=cache_dir / "cache.sqlite",
         is_dev=repo is not None,
+        is_default=repo is None and not any_override,
     )
 
 

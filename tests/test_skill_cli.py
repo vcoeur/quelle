@@ -52,3 +52,19 @@ def test_skill_status_json_reports_targets() -> None:
     scopes = {row["scope"] for row in payload["targets"]}
     assert scopes == {"user", "project", "claude"}
     assert payload["bundled_bytes"] > 0
+
+
+def test_skill_status_honours_root_json_flag() -> None:
+    """`quelle --json skill status` must emit JSON like every other command."""
+    result = runner.invoke(app, ["--json", "skill", "status"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert {row["scope"] for row in payload["targets"]} == {"user", "project", "claude"}
+
+
+def test_skill_install_honours_root_json_flag(tmp_path: Path) -> None:
+    dest = tmp_path / "skills" / "quelle"
+    result = runner.invoke(app, ["--json", "skill", "install", "--dest", str(dest)])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert Path(payload["installed"]) == dest / "SKILL.md"

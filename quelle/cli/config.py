@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import subprocess
 from dataclasses import fields
 from typing import Any
 
 import typer
 
+from quelle.cli._helpers import exit_code_for, load_settings_or_exit, report_error
 from quelle.cli.output import OutputMode, render_config
-from quelle.settings import Settings, load_settings
+from quelle.repositories.errors import ConfigError
+from quelle.settings import Settings
 
 config_app = typer.Typer(
     help="Inspect and edit the quelle configuration. Bare `quelle config` shows everything.",
@@ -48,6 +51,15 @@ QUELLE_CONTACT_EMAIL=you@example.com
 
 # Unpaywall requires an email. Defaults to QUELLE_CONTACT_EMAIL when unset.
 #UNPAYWALL_EMAIL=you@example.com
+
+# Google Books API key (console.cloud.google.com -> APIs & Services ->
+# Credentials, then enable the Books API). Unauthenticated calls cap at
+# 1 000 requests/day per IP; the key raises that ceiling.
+#GOOGLE_BOOKS_API_KEY=
+
+# Override the HTTP User-Agent. Defaults to quelle/<version>, with
+# (+mailto:QUELLE_CONTACT_EMAIL) appended when the email is set.
+#QUELLE_USER_AGENT=
 
 # HTTP timeout per request, in seconds.
 #QUELLE_HTTP_TIMEOUT=30
@@ -108,7 +120,7 @@ def _config_root(ctx: typer.Context) -> None:
     """Show the effective configuration when no subcommand is given."""
     if ctx.invoked_subcommand is not None:
         return
-    settings = load_settings()
+    settings = load_settings_or_exit()
     render_config(_full_config_payload(settings), mode=OutputMode.from_ctx(ctx))
 
 
@@ -121,15 +133,29 @@ def config_edit() -> None:
     knows the editor is opening a fresh template, not their previous
     edits.
     """
-    settings = load_settings()
+    settings = load_settings_or_exit()
     env_file = settings.paths.env_file
     created = _ensure_env_file(settings)
     editor = _resolve_editor()
+    # A multi-word $EDITOR ("code --wait") is a command line, not a single
+    # executable name — split it like a shell would.
+    argv = shlex.split(editor)
+    if not argv:
+        _editor_failed(ConfigError(f"editor command is empty: {editor!r}"))
     if created:
         typer.echo(f"Created {env_file} from the default template.")
         typer.echo("Set QUELLE_CONTACT_EMAIL for the Crossref / OpenAlex polite pool.")
     typer.echo(f"Opening {env_file} in {editor!r}")
-    subprocess.run([editor, str(env_file)], check=False)
+    try:
+        subprocess.run([*argv, str(env_file)], check=False)
+    except OSError as exc:
+        _editor_failed(ConfigError(f"could not start editor {editor!r}: {exc}"))
+
+
+def _editor_failed(exc: ConfigError) -> None:
+    """Report a broken $VISUAL / $EDITOR value and exit with the config code."""
+    report_error(exc)
+    raise typer.Exit(exit_code_for(exc)) from exc
 
 
 def _ensure_env_file(settings: Settings) -> bool:

@@ -120,6 +120,7 @@ On failure, a structured error goes to **stderr** and the process exits non-zero
 | 2 | Network error / upstream rate limit |
 | 3 | Local cache error |
 | 4 | Configuration error |
+| 64 | CLI usage error (unknown flag or missing argument) |
 
 Branch on the exit code, not on the message text. Google Scholar URLs are unsupported (code 1) — copy the title and retry as free text.
 

@@ -31,6 +31,7 @@ from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 
 from quelle.models.publication import Publication
+from quelle.services.url_resolver import host_of
 
 # quelle `kind` → knoten vault kind. Consumed by `x_vcoeur.vault_kind`.
 # None / unknown collapses to "document".
@@ -42,28 +43,6 @@ KIND_MAP: dict[str, str] = {
     "web": "web",
     "media": "media",
 }
-
-# Hosts whose pages are treated as media (video / audio) rather than
-# generic web pages. Used by the URL resolver too, re-exported there.
-MEDIA_HOSTS: frozenset[str] = frozenset(
-    {
-        "youtube.com",
-        "www.youtube.com",
-        "m.youtube.com",
-        "youtu.be",
-        "vimeo.com",
-        "www.vimeo.com",
-        "player.vimeo.com",
-        "podcasts.apple.com",
-        "open.spotify.com",
-        "soundcloud.com",
-        "www.soundcloud.com",
-        "twitch.tv",
-        "www.twitch.tv",
-        "dailymotion.com",
-        "www.dailymotion.com",
-    }
-)
 
 
 def vault_kind(kind: str | None) -> str:
@@ -170,7 +149,7 @@ def _web_key(pub: Publication) -> str:
     year = _year_or_retrieval(pub)
     url = pub.source_url
 
-    if url and _host(url) in {"github.com", "www.github.com"}:
+    if url and host_of(url) in {"github.com", "www.github.com"}:
         org_repo = _github_org_repo(url)
         if org_repo:
             org, repo = org_repo
@@ -233,7 +212,7 @@ def _last_resort(pub: Publication) -> str:
     """
     date = datetime.now().strftime("%Y%m%d")
     if pub.source_url:
-        host = _strip_www(_host(pub.source_url))
+        host = _strip_www(host_of(pub.source_url))
         if host:
             return f"{_camel(host)}{date}"
     if pub.title:
@@ -278,11 +257,6 @@ def _alnum(text: str, *, cap: int = 24) -> str:
     return cleaned[:cap]
 
 
-def _host(url: str) -> str:
-    """Lower-cased hostname (no port), or `""`."""
-    return (urlsplit(url).hostname or "").lower()
-
-
 def _strip_www(host: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
@@ -295,7 +269,7 @@ def _domain_label(url: str) -> str:
     `example`). Two-part ccTLDs (e.g. `example.co.uk`) are handled
     imperfectly — the rule returns `co` there. (not verified)
     """
-    host = _strip_www(_host(url))
+    host = _strip_www(host_of(url))
     if not host:
         return ""
     labels = host.split(".")
@@ -328,7 +302,7 @@ def _media_id(url: str) -> str | None:
 
     YouTube `?v=`, `youtu.be/<id>`, else the last path segment.
     """
-    host = _host(url)
+    host = host_of(url)
     parts = urlsplit(url)
     if "youtube.com" in host:
         values = parse_qs(parts.query).get("v")

@@ -112,3 +112,25 @@ def test_load_taken_set_from_stdin_dash(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_load_taken_set_empty() -> None:
     assert load_taken_set(None, None) == set()
+
+
+def test_load_taken_set_from_json_array_file(tmp_path: Path) -> None:
+    """A top-level JSON array of strings is accepted."""
+    path = tmp_path / "taken.json"
+    path.write_text(json.dumps(["A2020", "B2021", " "]), encoding="utf-8")
+    assert load_taken_set(None, str(path)) == {"A2020", "B2021"}
+
+
+def test_load_taken_set_rejects_string_citekeys_value(tmp_path: Path) -> None:
+    """`{"citekeys": "AB"}` must not be iterated into single characters."""
+    path = tmp_path / "taken.json"
+    path.write_text(json.dumps({"citekeys": "AB"}), encoding="utf-8")
+    with pytest.raises(ValueError, match="list of strings"):
+        load_taken_set(None, str(path))
+
+
+def test_load_taken_set_rejects_non_string_array_entries(tmp_path: Path) -> None:
+    path = tmp_path / "taken.json"
+    path.write_text(json.dumps(["A2020", 7]), encoding="utf-8")
+    with pytest.raises(ValueError, match="list of strings"):
+        load_taken_set(None, str(path))

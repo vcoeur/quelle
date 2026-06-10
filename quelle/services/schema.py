@@ -6,11 +6,10 @@ flags, the `Publication` / Source field list, the `x_vcoeur` block, a
 summary of the CiteKey convention, the quelle→knoten kind map, and the
 exit codes.
 
-Commands and flags are introspected from the live Typer/Click app via
-duck-typed attribute access (not `isinstance` against `click`), so the
-listing never drifts from the real surface and survives typer >= 0.25
-vendoring its own copy of click. The static tables are read from the
-modules that own them.
+This module owns the *static* contract tables and reads the field lists
+from the modules that own them. The command listing is introspected from
+the live Typer app by `quelle.cli.introspect` and passed in by the CLI —
+imports only go downward, so nothing here touches `quelle.cli`.
 """
 
 from __future__ import annotations
@@ -18,21 +17,21 @@ from __future__ import annotations
 from dataclasses import fields
 from typing import Any
 
-import typer
-
 from quelle import __version__
 from quelle.models.publication import Author, Kind, Publication
 from quelle.services.citekey import KIND_MAP
 
-# Error kinds → exit codes — mirrors `exit_code_for` in `quelle.cli._helpers`.
-# Duplicated here intentionally: the schema is a stable data contract and
-# should not change shape just because the classifier's internals do.
+# Error kinds → exit codes — mirrors `exit_code_for` in `quelle.cli._helpers`
+# plus the click usage-error code set in `quelle.cli.main`. Duplicated here
+# intentionally: the schema is a stable data contract and should not change
+# shape just because the classifier's internals do.
 EXIT_CODES: tuple[dict[str, Any], ...] = (
     {"code": 0, "meaning": "Success"},
     {"code": 1, "meaning": "User error or publication not found"},
     {"code": 2, "meaning": "Network error / upstream rate limit"},
     {"code": 3, "meaning": "Local cache (SQLite) error"},
     {"code": 4, "meaning": "Configuration error"},
+    {"code": 64, "meaning": "CLI usage error (unknown flag or missing argument)"},
 )
 
 # Summary of the CiteKey convention. The authoritative rules live in
@@ -57,65 +56,17 @@ X_VCOEUR_BLOCK: dict[str, str] = {
 }
 
 
-def _param_info(param: Any) -> dict[str, Any] | None:
-    """Describe a single Click parameter, or None for things we don't surface.
-
-    Duck-typed on `param.param_type_name` ("argument" / "option") instead of
-    `isinstance` against `click`: typer >= 0.25 vendors its own copy of click,
-    so an introspected param is not an instance of a separately-imported
-    `click`'s classes — an isinstance check silently returns False there and
-    the whole surface drops out of the schema.
-    """
-    kind = getattr(param, "param_type_name", None)
-    if kind == "argument":
-        return {"name": param.name, "kind": "argument", "required": param.required}
-    if kind == "option":
-        return {
-            "name": param.name,
-            "kind": "option",
-            "flags": list(param.opts),
-            "required": param.required,
-            "is_flag": getattr(param, "is_flag", False),
-            "multiple": getattr(param, "multiple", False),
-            "help": (getattr(param, "help", "") or "").strip(),
-        }
-    return None
-
-
-def _first_line(text: str | None) -> str:
-    return (text or "").strip().split("\n", 1)[0].strip()
-
-
-def _command_info(name: str, cmd: Any) -> dict[str, Any]:
-    """Describe a command (and one level of subcommands for groups).
-
-    A group is detected by a populated `.commands` dict rather than an
-    `isinstance(cmd, click.Group)` check (see `_param_info` for why).
-    """
-    info: dict[str, Any] = {
-        "name": name,
-        "help": _first_line(cmd.help or cmd.short_help),
-        "params": [p for p in (_param_info(pp) for pp in cmd.params) if p],
-    }
-    subcommands = getattr(cmd, "commands", None)
-    if isinstance(subcommands, dict) and subcommands:
-        info["subcommands"] = [_command_info(sub, subcommands[sub]) for sub in sorted(subcommands)]
-    return info
-
-
 def _publication_fields() -> list[dict[str, str]]:
     """The Source field list + declared types, from the dataclass itself."""
     return [{"name": f.name, "type": str(f.type)} for f in fields(Publication)]
 
 
-def build_schema() -> dict[str, Any]:
-    """Build the full machine-readable contract dict for `quelle schema`."""
-    from quelle.cli.main import app  # local import to avoid an import cycle
+def build_schema(*, commands: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the full machine-readable contract dict for `quelle schema`.
 
-    cli = typer.main.get_command(app)
-    cli_commands = getattr(cli, "commands", {})
-    commands = [_command_info(name, cli_commands[name]) for name in sorted(cli_commands)]
-
+    `commands` is the live command listing introspected by the CLI layer
+    (`quelle.cli.introspect.command_listing`).
+    """
     return {
         "tool": "quelle",
         "version": __version__,

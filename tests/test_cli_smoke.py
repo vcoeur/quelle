@@ -50,6 +50,88 @@ def test_search_requires_query() -> None:
     assert result.exit_code != 0
 
 
+# --- exit-code contract -----------------------------------------------------
+
+
+def test_usage_error_missing_argument_exits_64() -> None:
+    """Click usage errors must not collide with the documented network code 2."""
+    result = runner.invoke(app, ["fetch"])
+    assert result.exit_code == 64
+
+
+def test_usage_error_unknown_option_exits_64() -> None:
+    result = runner.invoke(app, ["fetch", "x", "--no-such-flag"])
+    assert result.exit_code == 64
+
+
+def test_corrupt_cache_exits_3(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`cache list` on a corrupt SQLite file reports CacheError and exits 3."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / "cache.sqlite").write_bytes(b"this is not a sqlite database " * 20)
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    result = runner.invoke(app, ["cache", "list"])
+    assert result.exit_code == 3
+
+
+def test_malformed_env_value_exits_4(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-numeric QUELLE_HTTP_TIMEOUT is a ConfigError (4), not a traceback."""
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("QUELLE_HTTP_TIMEOUT", "not-a-number")
+
+    result = runner.invoke(app, ["cache", "list"])
+    assert result.exit_code == 4
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+# --- User-Agent + polite-pool warning ---------------------------------------
+
+
+def test_user_agent_carries_package_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from quelle import __version__
+    from quelle.settings import load_settings
+
+    monkeypatch.setenv("QUELLE_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("QUELLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("QUELLE_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("QUELLE_USER_AGENT", raising=False)
+    monkeypatch.setenv("QUELLE_CONTACT_EMAIL", "alice@example.com")
+
+    settings = load_settings()
+    assert settings.user_agent == f"quelle/{__version__} (+mailto:alice@example.com)"
+
+
+def test_build_client_warns_without_contact_email(tmp_settings, capsys) -> None:
+    from dataclasses import replace as dc_replace
+
+    from quelle.repositories.http_client import build_client
+
+    anonymous = dc_replace(tmp_settings, contact_email="")
+    with build_client(anonymous):
+        pass
+    captured = capsys.readouterr()
+    assert captured.out == ""  # never stdout — --json output stays clean
+    assert "polite-pool" in captured.err
+    assert "quelle config edit" in captured.err
+
+
+def test_build_client_silent_with_contact_email(tmp_settings, capsys) -> None:
+    from quelle.repositories.http_client import build_client
+
+    with build_client(tmp_settings):
+        pass
+    captured = capsys.readouterr()
+    assert captured.err == ""
+
+
 def test_search_renders_json_with_mocked_service(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

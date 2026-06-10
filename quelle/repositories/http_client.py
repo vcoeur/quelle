@@ -8,6 +8,8 @@ participation is baked into the User-Agent via `Settings.user_agent`.
 
 from __future__ import annotations
 
+import sys
+
 import httpx
 
 from quelle.repositories.errors import NetworkError, RateLimitError
@@ -15,7 +17,19 @@ from quelle.settings import Settings
 
 
 def build_client(settings: Settings) -> httpx.Client:
-    """Return an httpx.Client configured with timeout and a polite User-Agent."""
+    """Return an httpx.Client configured with timeout and a polite User-Agent.
+
+    With no contact email configured, a one-line warning goes to stderr
+    (once per client, never stdout — `--json` output stays clean): the
+    Crossref / OpenAlex polite pools identify callers by the mailto in
+    the User-Agent, and anonymous traffic gets the slow lane.
+    """
+    if not settings.contact_email:
+        print(
+            "quelle: warning: QUELLE_CONTACT_EMAIL is not set — Crossref/OpenAlex "
+            "polite-pool identification is off; set it via `quelle config edit`.",
+            file=sys.stderr,
+        )
     return httpx.Client(
         timeout=settings.http_timeout,
         headers={"User-Agent": settings.user_agent},

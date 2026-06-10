@@ -118,3 +118,91 @@ def test_config_edit_visual_beats_editor(
 
     runner.invoke(app, ["config", "edit"])
     assert captured[0][0] == "visual-editor"
+
+
+def test_config_edit_splits_multi_word_editor(
+    isolated_env: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`EDITOR="code --wait"` is a command line, not one executable name."""
+    captured: list[list[str]] = []
+
+    import quelle.cli.config as cfg
+
+    monkeypatch.setattr(cfg.subprocess, "run", lambda cmd, check=False: captured.append(cmd))
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "code --wait")
+
+    config, _data, _cache = isolated_env
+    result = runner.invoke(app, ["config", "edit"])
+    assert result.exit_code == 0
+    assert captured[0][:2] == ["code", "--wait"]
+    assert captured[0][2] == str(config / ".env")
+
+
+def test_config_edit_missing_editor_is_clean_config_error(
+    isolated_env: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spawn failure exits with the config code, not a traceback."""
+
+    import quelle.cli.config as cfg
+
+    def _boom(cmd: list[str], check: bool = False) -> None:
+        raise FileNotFoundError(f"No such file or directory: {cmd[0]!r}")
+
+    monkeypatch.setattr(cfg.subprocess, "run", _boom)
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "definitely-not-an-editor")
+
+    result = runner.invoke(app, ["config", "edit"])
+    assert result.exit_code == 4
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_seeded_env_template_lists_documented_keys(
+    isolated_env: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The seeded template stays consistent with .env.example."""
+    import quelle.cli.config as cfg
+
+    monkeypatch.setattr(cfg.subprocess, "run", lambda cmd, check=False: None)
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "my-fake-editor")
+
+    config, _data, _cache = isolated_env
+    result = runner.invoke(app, ["config", "edit"])
+    assert result.exit_code == 0
+    seeded = (config / ".env").read_text()
+    for key in (
+        "QUELLE_CONTACT_EMAIL",
+        "OPENALEX_API_KEY",
+        "SEMANTIC_SCHOLAR_API_KEY",
+        "UNPAYWALL_EMAIL",
+        "GOOGLE_BOOKS_API_KEY",
+        "QUELLE_USER_AGENT",
+        "QUELLE_HTTP_TIMEOUT",
+        "QUELLE_MAX_PDF_MB",
+    ):
+        assert key in seeded, f"{key} missing from the seeded .env template"
+
+
+def test_malformed_env_file_value_exits_4(
+    isolated_env: tuple[Path, Path, Path],
+) -> None:
+    """A bad value in the .env file is a ConfigError (exit 4), not a traceback."""
+    import os
+
+    config, _data, _cache = isolated_env
+    config.mkdir(parents=True, exist_ok=True)
+    (config / ".env").write_text("QUELLE_MAX_PDF_MB=lots\n")
+
+    try:
+        result = runner.invoke(app, ["config"])
+        assert result.exit_code == 4
+        assert result.exception is None or isinstance(result.exception, SystemExit)
+    finally:
+        # `env.read_env` loads the .env into os.environ; scrub the bad value
+        # so it cannot leak into later tests.
+        os.environ.pop("QUELLE_MAX_PDF_MB", None)
